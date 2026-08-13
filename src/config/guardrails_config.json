@@ -1,0 +1,37 @@
+{
+  "banned_medical_terms": [
+    "bệnh", "đột quỵ", "thiếu máu", "chẩn đoán", "triệu chứng",
+    "suy nhược", "viêm", "nhiễm trùng", "sốt", "huyết áp",
+    "tim mạch", "tụt đường huyết", "đường huyết", "thiếu sắt",
+    "suy tim", "đau tim", "co giật", "hạ canxi", "rối loạn",
+    "khám", "bác sĩ kê", "thuốc", "toa", "điều trị", "hội chứng"
+  ],
+  "banned_patterns": ["mmhg", "bpm", "spo2", "mg/dl", "mmol"],
+  "max_output_chars": 200,
+  "fallback_templates": {
+    "fatigue": "Hôm nay trông bạn có vẻ hơi mệt hơn thường ngày, hãy cân nhắc nghỉ ngơi vài phút trước khi tiếp tục hành trình nhé.",
+    "long_drive": "Bạn đã lái xe khá lâu rồi, dừng chân thư giãn một chút cho tỉnh táo nhé.",
+    "default": "Bạn nhớ giữ sức khỏe và lái xe cẩn thận nhé."
+  },
+  "template_bank": {
+    "looks_more_tired_than_usual|gentle|none|moving": "Hôm nay trông bạn có vẻ hơi mệt hơn thường ngày, đi chậm lại chút và nghỉ khi tiện nhé.",
+    "looks_more_tired_than_usual|gentle|none|stopped": "Hôm nay trông bạn có vẻ hơi mệt hơn thường ngày, nghỉ thêm chút rồi hãy đi tiếp nhé.",
+    "looks_more_tired_than_usual|recommend_rest_now|long_drive|moving": "Bạn đã lái liên tục khá lâu và trông có vẻ thấm mệt, phía trước có chỗ nghỉ thì tấp vào vài phút nhé.",
+    "looks_more_tired_than_usual|recommend_rest_now|hot_weather|moving": "Trời đang nắng nóng và trông bạn có vẻ mệt, tìm chỗ mát dừng chân uống chút nước nhé.",
+    "looks_more_tired_than_usual|recommend_rest_now|long_drive_hot_weather|moving": "Bạn đã lái hơn hai tiếng dưới trời nắng nóng và trông khá mệt, hãy tấp vào chỗ mát nghỉ ngơi rồi hãy đi tiếp nhé.",
+    "looks_more_tired_than_usual|recommend_rest_now|long_drive_hot_weather|stopped": "Hôm nay bạn đã chạy đường dài trời nóng và trông khá mệt, nghỉ thêm chút cho lại sức rồi hãy tiếp tục nhé.",
+    "eyes_heavy|gentle|none|moving": "Mắt bạn có vẻ hơi mỏi rồi, chú ý tập trung và nghỉ khi tiện nhé.",
+    "eyes_heavy|recommend_rest_now|long_drive|moving": "Bạn lái đã lâu và mắt có vẻ mỏi, dừng nghỉ vài phút cho tỉnh táo nhé.",
+    "signs_of_long_trip_fatigue|gentle|long_drive|moving": "Chặng đường hôm nay khá dài rồi, bạn nhớ giữ nhịp thoải mái và nghỉ giữa chặng nhé.",
+    "signs_of_long_trip_fatigue|recommend_rest_now|long_drive|moving": "Bạn đã lái liên tục hơn một giờ, dừng chân thư giãn một chút cho tỉnh táo nhé.",
+    "signs_of_long_trip_fatigue|recommend_rest_now|long_drive|stopped": "Hôm nay bạn chạy liên tục khá lâu rồi, tranh thủ nghỉ thêm chút trước khi đi tiếp nhé.",
+    "signs_of_long_trip_fatigue|recommend_rest_now|long_drive_hot_weather|moving": "Bạn đã lái hơn hai tiếng dưới trời nắng nóng rồi, phía trước có chỗ mát thì tấp vào uống chút nước nghỉ vài phút nhé.",
+    "signs_of_long_trip_fatigue|recommend_rest_now|long_drive_hot_weather|stopped": "Hôm nay bạn chạy đường dài trời nóng rồi, nghỉ thêm chút cho lại sức trước khi đi tiếp nhé.",
+    "signs_of_long_trip_fatigue|recommend_rest_now|hot_weather|moving": "Trời đang nắng nóng, bạn tìm chỗ mát dừng chân uống chút nước rồi hãy đi tiếp nhé.",
+    "eyes_heavy|recommend_rest_now|long_drive_hot_weather|moving": "Bạn lái đã lâu dưới trời nóng và mắt có vẻ mỏi, tấp vào chỗ mát nghỉ vài phút cho tỉnh táo nhé.",
+    "eyes_heavy|recommend_rest_now|hot_weather|moving": "Trời nóng và mắt bạn có vẻ mỏi, dừng chân chỗ mát nghỉ chút nhé.",
+    "eyes_heavy|gentle|none|stopped": "Mắt bạn có vẻ hơi mỏi, nghỉ thêm chút rồi hãy đi tiếp nhé.",
+    "looks_normal|none|none|moving": "",
+    "looks_normal|none|none|stopped": ""
+  }
+}

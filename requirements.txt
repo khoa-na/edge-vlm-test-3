@@ -1,0 +1,10 @@
+# Lõi — bắt buộc (demo + test chạy với mock backend)
+numpy
+pytest
+
+# Tùy chọn — chạy thật Tier 1 với webcam
+# mediapipe
+# opencv-python
+
+# Tùy chọn — chạy thật Tier 2 với model GGUF
+# llama-cpp-python
