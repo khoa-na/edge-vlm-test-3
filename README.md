@@ -12,6 +12,7 @@ docs/
   02-medical-guardrails.md   Khối 2 — system prompt + guardrails 4 lớp
   03-health-baseline.md      Khối 3 — health baseline privacy-preserving
   04-evaluation.md           Đánh giá trên dataset FL3D (19k frame, acc 91.8%)
+  05-giai-trinh.md           Trả lời 4 câu hỏi giải trình (Mục 4 đề bài)
 src/
   pipeline.py                Pipeline chính (hoàn thiện TODO 1-4 của đề)
   tier1.py                   Tier 1: EAR/MAR/head pose + temporal state machine
