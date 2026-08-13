@@ -12,6 +12,8 @@ Chạy:
 import argparse
 from pathlib import Path
 
+import numpy as np
+
 try:
     from .pipeline import SafetyAndHealthMonitorPipeline
 except ImportError:
@@ -24,9 +26,17 @@ def iter_frames(input_path: str, fps_hint: float):
     """Yield (timestamp_sec, frame_rgb) từ video file hoặc thư mục ảnh."""
     import cv2
 
+    import re
+
+    def numeric_key(f):
+        m = re.search(r"(\d+)", f.stem)
+        return (int(m.group(1)) if m else 0, f.name)
+
     p = Path(input_path)
     if p.is_dir():
-        files = sorted(f for f in p.iterdir() if f.suffix.lower() in IMG_EXTS)
+        # sort theo SỐ trong tên file — sort chữ cái làm frame12 đứng sau frame1052
+        files = sorted((f for f in p.iterdir() if f.suffix.lower() in IMG_EXTS),
+                       key=numeric_key)
         if not files:
             raise SystemExit(f"Không có ảnh trong {p}")
         for i, f in enumerate(files):
@@ -57,24 +67,78 @@ def main():
     ap.add_argument("--vlm", default="quantized_vlm.gguf")
     ap.add_argument("--vlm-url", default=None,
                     help="URL llama-server (vd http://127.0.0.1:8090) — Tier 2 thật")
+    ap.add_argument("--output", default=None,
+                    help="đường dẫn mp4 xuất video annotate (EAR/MAR/pose + cảnh báo)")
     ap.add_argument("--driving-min", type=float, default=30,
                     help="continuous_driving_min giả lập cho telematics")
     args = ap.parse_args()
+
+    import cv2
 
     monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
                                              vlm_server_url=args.vlm_url)
     telematics = {"continuous_driving_min": args.driving_min, "speed_kmh": 45,
                   "ambient_temp_c": 30, "weather": "normal"}
 
+    writer = None
     n_frames, n_alerts, last = 0, 0, None
+    alert_banner, banner_until = "", 0.0
+
     for ts, frame, name in iter_frames(args.input, args.fps):
         alert = monitor.process_stream_frame(frame, telematics, now=ts)
         n_frames += 1
         if alert and alert != last:
             n_alerts += 1
             print(f"[t={ts:7.2f}s | {name}] 🔊 {alert}")
+        if alert:
+            alert_banner, banner_until = alert, ts + 2.0  # giữ banner 2s
         last = alert
 
+        if args.output:
+            # Canvas cố định: nguồn (vd FL3D) có thể là crop mặt với kích
+            # thước MỖI FRAME MỖI KHÁC — VideoWriter lặng lẽ bỏ frame sai
+            # size, nên letterbox tất cả về một khung
+            CW, CH = 640, 480
+            src = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            sh, sw = src.shape[:2]
+            scale = min(CW / sw, CH / sh)
+            nw, nh = int(sw * scale), int(sh * scale)
+            resized = cv2.resize(src, (nw, nh))
+            bgr = np.zeros((CH, CW, 3), dtype=np.uint8)
+            x0, y0 = (CW - nw) // 2, (CH - nh) // 2
+            bgr[y0:y0 + nh, x0:x0 + nw] = resized
+            if writer is None:
+                writer = cv2.VideoWriter(args.output,
+                                         cv2.VideoWriter_fourcc(*"mp4v"),
+                                         args.fps, (CW, CH))
+            # overlay chỉ số Tier 1 — đọc từ lần analyze cuối, không extract lại
+            t1_res = getattr(monitor.tier1, "last_result", {})
+            m = t1_res.get("raw")
+            if m is not None and m.face_found:
+                lines = [
+                    f"t={ts:6.1f}s EAR={m.ear:.2f} MAR={m.mar:.2f} "
+                    f"perclos={t1_res.get('perclos', 0):.2f}",
+                    f"pitch={m.pitch_deg:+.0f} yaw={m.yaw_deg:+.0f} "
+                    f"closed={t1_res.get('eyes_closed_duration_sec', 0):.1f}s",
+                ]
+            else:
+                lines = [f"t={ts:6.1f}s (no face)"]
+            for i, txt in enumerate(lines):
+                cv2.putText(bgr, txt, (8, 20 + i * 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
+                cv2.putText(bgr, txt, (8, 20 + i * 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 255, 80), 1)
+            if ts < banner_until and alert_banner:
+                h, w = bgr.shape[:2]
+                cv2.rectangle(bgr, (0, 0), (w - 1, h - 1), (0, 0, 255), 4)
+                cv2.rectangle(bgr, (0, h - 26), (w, h), (0, 0, 200), -1)
+                cv2.putText(bgr, alert_banner[:70], (6, h - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
+            writer.write(bgr)
+
+    if writer is not None:
+        writer.release()
+        print(f"Video annotate: {args.output}")
     print(f"\nXử lý {n_frames} frame, {n_alerts} cảnh báo.")
 
 

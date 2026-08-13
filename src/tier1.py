@@ -322,4 +322,5 @@ class Tier1Analyzer:
             result["trigger_vlm_needed"] = True
             result["trigger_reason"] = "T4_repeated_head_turns"
 
+        self.last_result = result  # cho overlay/debug đọc, khỏi extract lại
         return result

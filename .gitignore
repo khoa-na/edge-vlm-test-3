@@ -6,3 +6,4 @@ venv/
 *.onnx
 *.pt
 .env
+demo_output.mp4
