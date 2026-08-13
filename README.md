@@ -11,6 +11,7 @@ docs/
   01-two-tier-cascade.md     Khối 1 — kiến trúc cascade 2 tầng + telematics fusion
   02-medical-guardrails.md   Khối 2 — system prompt + guardrails 4 lớp
   03-health-baseline.md      Khối 3 — health baseline privacy-preserving
+  04-evaluation.md           Đánh giá trên dataset FL3D (19k frame, acc 91.8%)
 src/
   pipeline.py                Pipeline chính (hoàn thiện TODO 1-4 của đề)
   tier1.py                   Tier 1: EAR/MAR/head pose + temporal state machine
@@ -19,6 +20,8 @@ src/
   vlm_backend.py             Tier 2: MockVLM + LlamaCppVLM (GGUF)
   demo.py                    Demo kịch bản (không cần camera/model)
   run_webcam.py              Chạy thật với webcam (cần mediapipe + opencv)
+  run_video.py               Chạy thật trên video file / thư mục frame
+  eval_fl3d.py               Đánh giá trên dataset FL3D có nhãn
   config/guardrails_config.json   Banned list + template bank duyệt sẵn
 tests/
   test_pipeline.py           21 unit tests: trigger, guardrails, baseline
