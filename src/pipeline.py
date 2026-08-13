@@ -52,7 +52,7 @@ PRE_RIDE_CONF = 0.6
 
 
 class MockObjectDetector:
-    """Detector giả cho pre-ride check (helmet/mask/kính). Production: YOLO INT8
+    """Detector giả cho pre-ride check (helmet/mask/kính). Production: YOLO26n INT8
     cùng model với phone detection, bật đủ class khi xe chưa lăn bánh.
     Trả dict class -> confidence "đang đeo/đã cài".
     """

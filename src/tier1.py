@@ -186,7 +186,7 @@ class MediaPipeLandmarkBackend:
 class Tier1Analyzer:
     """Temporal state machine trên metric thô — phần lõi chống nhiễu.
 
-    phone_detector: callable(frame) -> confidence, cắm YOLO INT8 ở production;
+    phone_detector: callable(frame) -> confidence, cắm YOLO26n INT8 ở production;
     None thì dùng phone_conf từ backend (mock cung cấp, MediaPipe không có).
     """
 

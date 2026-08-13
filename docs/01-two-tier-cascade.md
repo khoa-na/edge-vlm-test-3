@@ -45,8 +45,8 @@ Camera 5-10 FPS
 |---|---|---|---|
 | Face Landmark | MediaPipe Face Mesh (468 điểm) hoặc PFLD | EAR, MAR, vị trí mắt/môi | ~5–10ms CPU |
 | Head Pose | solvePnP trên 6 landmark chuẩn → Euler angles | Pitch / Yaw / Roll | ~1ms (tính hình học, không cần model riêng) |
-| Object Detection (in-ride) | YOLOv8n quantized INT8, chỉ giữ class `phone` | phone (kèm vị trí tay/mặt) | ~15–30ms NPU, chạy **mọi frame** — phone là sự kiện khẩn cấp <300ms nên không được hạ FPS |
-| Object Detection (pre-ride) | Cùng model YOLOv8n, bật đủ class | helmet_strap, mask, sunglasses | Chỉ chạy lúc xe chưa lăn bánh, không có ràng buộc latency |
+| Object Detection (in-ride) | YOLO26n quantized INT8, chỉ giữ class `phone` (NMS-free, DFL-free — latency tất định, không rớt accuracy khi INT8) | phone (kèm vị trí tay/mặt) | ~15–30ms NPU, chạy **mọi frame** — phone là sự kiện khẩn cấp <300ms nên không được hạ FPS |
+| Object Detection (pre-ride) | Cùng model YOLO26n, bật đủ class | helmet_strap, mask, sunglasses | Chỉ chạy lúc xe chưa lăn bánh, không có ràng buộc latency |
 
 **Các chỉ số cụ thể:**
 
@@ -90,7 +90,7 @@ Chạy 1 lần khi bắt đầu hành trình (xe chưa lăn bánh, không có r�
 
 ## 4. Tier 2 — Edge VLM (Event-Driven)
 
-- **Model đề xuất**: Qwen2-VL-2B-Instruct hoặc SmolVLM-2B, quantized Q4 (GGUF chạy llama.cpp / ONNX Runtime tùy chip). Footprint ~1.5–2GB RAM, inference 1–3s/ảnh trên NPU edge.
+- **Model**: Qwen3.5-2B-Instruct quantized Q4_K_M (GGUF 1.28GB + mmproj 0.67GB, chạy llama-server của llama.cpp) — **đã chạy thật, xem 04-evaluation.md §5**. Footprint ~2GB RAM, inference 4–7s/ảnh CPU (nhanh hơn đáng kể trên NPU/GPU edge). Phương án B: Gemma 4 E2B nếu roadmap cần thêm audio native.
 - **Input**: 1 frame hiện tại (đã crop vùng mặt) + trigger_reason + telematics + delta so với baseline (dạng text, không gửi ảnh lịch sử).
 - **Output**: 1 câu nhắc nhở tiếng Việt, bắt buộc đi qua `enforce_medical_guardrails` (Khối 2) trước khi phát ra loa/màn hình.
 - **Quản lý tài nguyên**: hàng đợi 1 slot (trigger mới đè trigger cũ chưa chạy); theo dõi nhiệt độ chip, quá ngưỡng thì bỏ qua T6 định kỳ, chỉ giữ trigger sự kiện.
