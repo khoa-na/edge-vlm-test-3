@@ -11,7 +11,7 @@ docs/
   01-two-tier-cascade.md     Khối 1 — kiến trúc cascade 2 tầng + telematics fusion
   02-medical-guardrails.md   Khối 2 — system prompt + guardrails 4 lớp
   03-health-baseline.md      Khối 3 — health baseline privacy-preserving
-  04-evaluation.md           Đánh giá trên dataset FL3D (19k frame, acc 91.8%)
+  04-evaluation.md           Đánh giá FL3D: episode recall 85%, false-alarm 0.67%
   05-giai-trinh.md           Trả lời 4 câu hỏi giải trình (Mục 4 đề bài)
 src/
   pipeline.py                Pipeline chính (hoàn thiện TODO 1-4 của đề)
