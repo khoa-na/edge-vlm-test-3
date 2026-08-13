@@ -34,12 +34,11 @@ def run_scenario(monitor, backend, name, metrics, telematics, seconds, t0):
 
 
 def main():
-    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path="quantized_vlm.gguf")
-    backend = monitor.tier1.backend
-    if not isinstance(backend, MockLandmarkBackend):
-        print("MediaPipe đang bật — demo kịch bản cần mock backend; "
-              "dùng webcam thật qua run_webcam.py")
-        return
+    # Demo kịch bản luôn dùng mock backend (metrics theo kịch bản);
+    # chạy model thật: run_webcam.py / run_video.py / eval_fl3d.py
+    backend = MockLandmarkBackend()
+    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path="quantized_vlm.gguf",
+                                             tier1_backend=backend)
 
     telem_normal = {"continuous_driving_min": 20, "speed_kmh": 45,
                     "ambient_temp_c": 28, "weather": "normal"}

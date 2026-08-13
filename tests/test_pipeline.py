@@ -193,7 +193,7 @@ def test_null_feature_skipped():
 # Pipeline end-to-end (mock backends)
 # ----------------------------------------------------------------------
 def test_emergency_alert_bypasses_vlm():
-    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf")
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf", tier1_backend=MockLandmarkBackend())
     p.tier1.backend.set_scenario(ear=0.10)
     out = None
     for i in range(25):
@@ -202,7 +202,7 @@ def test_emergency_alert_bypasses_vlm():
 
 
 def test_long_driving_gets_guarded_vlm_response():
-    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf")
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf", tier1_backend=MockLandmarkBackend())
     p.tier1.backend.set_scenario(ear=0.30)
     out = p.process_stream_frame(
         FRAME, {"continuous_driving_min": 125, "speed_kmh": 52,
@@ -213,7 +213,7 @@ def test_long_driving_gets_guarded_vlm_response():
 
 
 def test_vlm_cooldown_prevents_spam():
-    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf")
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf", tier1_backend=MockLandmarkBackend())
     p.tier1.backend.set_scenario(ear=0.30)
     telem = {"continuous_driving_min": 90, "speed_kmh": 40}
     out1 = p.process_stream_frame(FRAME, telem, now=0.0)

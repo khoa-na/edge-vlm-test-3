@@ -16,7 +16,7 @@ import numpy as np
 # Ngưỡng — một chỗ duy nhất, hai tài liệu 01/03 cùng tham chiếu
 EAR_CLOSED_THRESHOLD = 0.20
 EYES_CLOSED_ALERT_SEC = 1.5
-MAR_YAWN_THRESHOLD = 0.60
+MAR_YAWN_THRESHOLD = 0.35  # hiệu chỉnh trên FL3D: yawning MAR~0.5, nói chuyện <0.2
 YAWN_MIN_DURATION_SEC = 2.0
 YAWN_WINDOW_SEC = 600.0
 YAWN_TRIGGER_COUNT = 3
@@ -59,19 +59,37 @@ class MockLandmarkBackend:
 
 
 class MediaPipeLandmarkBackend:
-    """Backend thật: MediaPipe Face Mesh (468 landmark) + solvePnP head pose."""
+    """Backend thật: MediaPipe FaceLandmarker (Tasks API, 478 landmark).
+
+    Cần model asset (tải 1 lần, ~3.7MB):
+    curl -sL -o models/face_landmarker.task --create-dirs \\
+      https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+    """
 
     # Chỉ số landmark MediaPipe cho EAR/MAR (chuẩn Face Mesh)
     LEFT_EYE = [362, 385, 387, 263, 373, 380]
     RIGHT_EYE = [33, 160, 158, 133, 153, 144]
     MOUTH = [61, 81, 311, 291, 402, 178]
 
-    def __init__(self):
+    DEFAULT_MODEL = "models/face_landmarker.task"
+
+    def __init__(self, model_path: Optional[str] = None):
         import mediapipe as mp  # ImportError nếu chưa cài -> pipeline tự fallback mock
-        self._mesh = mp.solutions.face_mesh.FaceMesh(
-            max_num_faces=1, refine_landmarks=True,
-            min_detection_confidence=0.5, min_tracking_confidence=0.5,
-        )
+        from mediapipe.tasks.python import BaseOptions
+        from mediapipe.tasks.python.vision import (FaceLandmarker,
+                                                   FaceLandmarkerOptions)
+        from pathlib import Path
+        path = model_path or self.DEFAULT_MODEL
+        if not Path(path).exists():
+            # thử tương đối với gốc repo (khi chạy từ src/)
+            alt = Path(__file__).parent.parent / path
+            if alt.exists():
+                path = str(alt)
+            else:
+                raise ImportError(f"face_landmarker model not found: {path}")
+        self._mp = mp
+        self._mesh = FaceLandmarker.create_from_options(FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=path), num_faces=1))
 
     @staticmethod
     def _aspect_ratio(pts: np.ndarray) -> float:
@@ -81,10 +99,12 @@ class MediaPipeLandmarkBackend:
         return (v1 + v2) / (2.0 * h + 1e-6)
 
     def extract(self, frame: np.ndarray) -> RawMetrics:
-        res = self._mesh.process(frame)
-        if not res.multi_face_landmarks:
+        mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB,
+                                  data=np.ascontiguousarray(frame))
+        res = self._mesh.detect(mp_image)
+        if not res.face_landmarks:
             return RawMetrics(face_found=False, landmark_conf=0.0)
-        lm = res.multi_face_landmarks[0].landmark
+        lm = res.face_landmarks[0]
         h, w = frame.shape[:2]
         pts = np.array([[p.x * w, p.y * h] for p in lm])
 

@@ -37,30 +37,32 @@ IMMEDIATE_ALERTS = {
 
 class SafetyAndHealthMonitorPipeline:
     def __init__(self, edge_vlm_path: str, device: str = "cuda",
-                 profile_id: int = 1, db_path: str = ":memory:"):
+                 profile_id: int = 1, db_path: str = ":memory:",
+                 tier1_backend=None):
         self.device = device
         self.profile_id = profile_id
         self.baseline = HealthBaseline(db_path)
         self.guardrails = MedicalGuardrails()
-        self.init_cascade_models(edge_vlm_path)
+        self.init_cascade_models(edge_vlm_path, tier1_backend)
         self._last_vlm_ts: Dict[str, float] = {}
         self._last_periodic_ts = 0.0
 
     # ------------------------------------------------------------------
-    def init_cascade_models(self, vlm_path: str):
+    def init_cascade_models(self, vlm_path: str, tier1_backend=None):
         """TODO 1: Init Tier 1 (Face Landmark EAR, Head Pose) và Tier 2 (VLM).
 
         Cả hai tầng đều cắm backend: dùng model thật nếu môi trường có,
         fallback mock để demo/test chạy được ở mọi nơi.
         """
         print(f"Loading Tier 1 (CV) & Tier 2 (Edge VLM) on {self.device}...")
-        try:
-            backend = MediaPipeLandmarkBackend()
-            print("Tier 1: MediaPipe Face Mesh (real)")
-        except ImportError:
-            backend = MockLandmarkBackend()
-            print("Tier 1: mock landmark backend (mediapipe not installed)")
-        self.tier1 = Tier1Analyzer(backend=backend)
+        if tier1_backend is None:
+            try:
+                tier1_backend = MediaPipeLandmarkBackend()
+                print("Tier 1: MediaPipe FaceLandmarker (real)")
+            except ImportError:
+                tier1_backend = MockLandmarkBackend()
+                print("Tier 1: mock landmark backend (mediapipe not installed)")
+        self.tier1 = Tier1Analyzer(backend=tier1_backend)
 
         try:
             self.vlm = LlamaCppVLMBackend(vlm_path)
