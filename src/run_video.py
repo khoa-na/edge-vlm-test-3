@@ -55,11 +55,14 @@ def main():
     ap.add_argument("--fps", type=float, default=10.0,
                     help="FPS giả định khi input là thư mục ảnh")
     ap.add_argument("--vlm", default="quantized_vlm.gguf")
+    ap.add_argument("--vlm-url", default=None,
+                    help="URL llama-server (vd http://127.0.0.1:8090) — Tier 2 thật")
     ap.add_argument("--driving-min", type=float, default=30,
                     help="continuous_driving_min giả lập cho telematics")
     args = ap.parse_args()
 
-    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm)
+    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
+                                             vlm_server_url=args.vlm_url)
     telematics = {"continuous_driving_min": args.driving_min, "speed_kmh": 45,
                   "ambient_temp_c": 30, "weather": "normal"}
 

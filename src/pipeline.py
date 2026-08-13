@@ -17,14 +17,16 @@ try:  # chạy được cả dạng package (python -m src.demo) lẫn script tr
     from .tier1 import (PERCLOS_TRIGGER, PERCLOS_TRIGGER_FATIGUED,
                         MediaPipeLandmarkBackend, MockLandmarkBackend,
                         Tier1Analyzer)
-    from .vlm_backend import LlamaCppVLMBackend, MockVLMBackend
+    from .vlm_backend import (LlamaCppVLMBackend, LlamaServerVLMBackend,
+                              MockVLMBackend)
 except ImportError:
     from guardrails import MedicalGuardrails
     from health_baseline import HealthBaseline
     from tier1 import (PERCLOS_TRIGGER, PERCLOS_TRIGGER_FATIGUED,
                        MediaPipeLandmarkBackend, MockLandmarkBackend,
                        Tier1Analyzer)
-    from vlm_backend import LlamaCppVLMBackend, MockVLMBackend
+    from vlm_backend import (LlamaCppVLMBackend, LlamaServerVLMBackend,
+                             MockVLMBackend)
 
 VLM_COOLDOWN_SEC = 180        # khóa trigger cùng loại 3 phút, tránh spam
 PERIODIC_VLM_INTERVAL_SEC = 300
@@ -77,12 +79,14 @@ def delivery_channel(telematics: Dict[str, Any]) -> str:
 class SafetyAndHealthMonitorPipeline:
     def __init__(self, edge_vlm_path: str, device: str = "cuda",
                  profile_id: int = 1, db_path: str = ":memory:",
-                 tier1_backend=None, object_detector=None, vlm_mmproj=None):
+                 tier1_backend=None, object_detector=None, vlm_mmproj=None,
+                 vlm_server_url: Optional[str] = None):
         self.device = device
         self.profile_id = profile_id
         self.baseline = HealthBaseline(db_path)
         self.guardrails = MedicalGuardrails()
         self.object_detector = object_detector or MockObjectDetector()
+        self.vlm_server_url = vlm_server_url
         self.init_cascade_models(edge_vlm_path, tier1_backend, vlm_mmproj)
         self._last_vlm_ts: Dict[str, float] = {}
         self._last_periodic_ts = 0.0
@@ -110,6 +114,15 @@ class SafetyAndHealthMonitorPipeline:
                 print("Tier 1: mock landmark backend (mediapipe not installed)")
         self.tier1 = Tier1Analyzer(backend=tier1_backend)
 
+        # Thứ tự ưu tiên Tier 2: llama-server (model mới day-1) ->
+        # llama-cpp-python (embedded) -> mock
+        if self.vlm_server_url:
+            try:
+                self.vlm = LlamaServerVLMBackend(self.vlm_server_url)
+                print(f"Tier 2: llama-server VLM (real) — {self.vlm_server_url}")
+                return
+            except Exception as e:
+                print(f"Tier 2: llama-server not reachable ({e}), falling back")
         try:
             self.vlm = LlamaCppVLMBackend(vlm_path, mmproj=vlm_mmproj)
             print(f"Tier 2: llama.cpp VLM (real) — {vlm_path}")
@@ -158,6 +171,18 @@ class SafetyAndHealthMonitorPipeline:
             vlm_json = self.vlm.generate(frame, trigger_reason, delta_text, telematics)
         except Exception:
             vlm_json = None  # fail-closed: validator sẽ đổ về fallback
+        # context_slots là FACT suy từ telematics — code điền tất định, model
+        # chỉ được quyết observation + severity (phần cần nhìn ảnh)
+        if isinstance(vlm_json, dict):
+            speed = telematics.get("speed_kmh", 0)
+            long_drive = telematics.get("continuous_driving_min", 0) > LONG_DRIVE_TRIGGER_MIN
+            hot = telematics.get("ambient_temp_c", 25) >= 33
+            vlm_json["context_slots"] = {
+                "trip_factor": ("long_drive_hot_weather" if long_drive and hot
+                                else "long_drive" if long_drive
+                                else "hot_weather" if hot else "none"),
+                "vehicle_state": "moving" if speed > 3 else "stopped",
+            }
         rendered = self.guardrails.validate_and_render(
             vlm_json, trigger_reason, max_severity=max_severity)
         if not rendered:  # looks_normal — không nhắc gì

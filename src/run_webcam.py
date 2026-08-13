@@ -20,10 +20,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vlm", default="quantized_vlm.gguf",
                     help="đường dẫn model GGUF (không có thì dùng mock)")
+    ap.add_argument("--vlm-url", default=None,
+                    help="URL llama-server (vd http://127.0.0.1:8090) — Tier 2 thật")
     ap.add_argument("--camera", type=int, default=0)
     args = ap.parse_args()
 
-    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm)
+    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
+                                             vlm_server_url=args.vlm_url)
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         raise SystemExit("Không mở được camera")

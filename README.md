@@ -44,9 +44,14 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install mediapipe opencv-python
 .venv/bin/python -m src.run_webcam
 
-# Chạy thật Tier 2 với model GGUF (tùy chọn)
-.venv/bin/pip install llama-cpp-python
-.venv/bin/python -m src.run_webcam --vlm qwen2-vl-2b-q4.gguf
+# Chạy thật Tier 2: Qwen3.5-2B qua llama-server (llama.cpp gốc)
+# 1. Tải model: unsloth/Qwen3.5-2B-GGUF (Q4_K_M + mmproj-F16, ~2GB)
+# 2. Khởi động server:
+llama-server -m models/qwen3.5-2b-q4_k_m.gguf \
+  --mmproj models/qwen3.5-2b-mmproj-f16.gguf --port 8090 -c 4096 \
+  --chat-template-kwargs '{"enable_thinking": false}'
+# 3. Chạy pipeline trỏ vào server:
+.venv/bin/python -m src.run_video --input clip.mp4 --vlm-url http://127.0.0.1:8090
 ```
 
 ## Kiến trúc tổng quan
@@ -54,7 +59,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 Two-tier cascade — tách safety path khỏi context path:
 
 - **Tier 1 (mọi frame, <50ms):** Face Landmark (EAR/MAR/PERCLOS), Head Pose Euler, phone detection. Cảnh báo khẩn cấp (mắt nhắm >1.5s, điện thoại) phát trực tiếp bằng TTS tĩnh duyệt sẵn — **không bao giờ chờ VLM** (SLA <300ms).
-- **Tier 2 (event-driven / định kỳ 5 phút):** Edge VLM quantized. Chỉ trả **JSON enum theo schema đóng** — lời văn tới người dùng luôn lấy từ template bank người viết đã duyệt; model không có kênh phát free text (bảo đảm không vi phạm chẩn đoán y tế).
+- **Tier 2 (event-driven / định kỳ 5 phút):** Edge VLM quantized — **đã chạy thật với Qwen3.5-2B Q4** qua llama-server (xem `docs/04` §5). Chỉ trả **JSON enum theo schema đóng** (ép grammar tại decoder) — lời văn tới người dùng luôn lấy từ template bank người viết đã duyệt; model không có kênh phát free text (bảo đảm không vi phạm chẩn đoán y tế).
 - **Health baseline:** chỉ lưu feature vô hướng (không ảnh/embedding), rolling mean/std 7 ngày theo ngày và light bucket, z-score anomaly với hướng xấu định nghĩa sẵn.
 
 Cả 2 tầng đều pluggable: MediaPipe/llama.cpp khi có, mock khi không — demo và test chạy được ở mọi môi trường.
