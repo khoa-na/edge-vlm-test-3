@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from guardrails import MedicalGuardrails
 from health_baseline import HealthBaseline
-from pipeline import SafetyAndHealthMonitorPipeline
+from pipeline import (MockObjectDetector, SafetyAndHealthMonitorPipeline,
+                      delivery_channel)
 from tier1 import MockLandmarkBackend, Tier1Analyzer
 
 FRAME = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -53,6 +54,50 @@ def test_phone_needs_3_consecutive_frames():
     r3 = analyzer.analyze(FRAME, now=0.2)
     assert not r1["using_phone"] and not r2["using_phone"]
     assert r3["using_phone"] and r3["immediate_alert"] == "T1_phone_or_head_down"
+
+
+def test_perclos_needs_30s_of_data():
+    """PERCLOS không được kết luận khi chưa gom đủ 30s dữ liệu (NC-05)."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend)
+    # 10s nhắm mắt 40% duty cycle — PERCLOS thô ~0.4 nhưng cửa sổ < 30s
+    out = None
+    for i in range(100):
+        backend.set_scenario(ear=0.10 if i % 5 < 2 else 0.30)
+        out = analyzer.analyze(FRAME, now=i / 10)
+    assert out["perclos"] == 0.0
+    # thêm 25s nữa (tổng 35s) — giờ mới được kết luận
+    for i in range(100, 350):
+        backend.set_scenario(ear=0.10 if i % 5 < 2 else 0.30)
+        out = analyzer.analyze(FRAME, now=i / 10)
+    assert out["perclos"] > 0.25
+
+
+def test_face_loss_gap_resets_eyes_timer():
+    """Mất mặt >0.5s không được cộng dồn vào thời gian nhắm mắt (NC-06)."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend)
+    _run_frames(analyzer, backend, dict(ear=0.10), seconds=1.0)       # nhắm 1s
+    backend.set_scenario(face_found=False)
+    for i in range(10):                                               # mất mặt 1s
+        analyzer.analyze(FRAME, now=1.0 + i / 10)
+    out = _run_frames(analyzer, backend, dict(ear=0.10), 0.6, t0=2.0)  # nhắm 0.6s
+    # 1.0 + 0.6 > 1.5 nhưng có gap ở giữa -> timer đã reset, không báo động giả
+    assert out["immediate_alert"] is None
+
+
+def test_perclos_threshold_modulated_by_telematics():
+    """Lái quá 90 phút -> ngưỡng PERCLOS hạ 0.25 -> 0.20 (docs/01 §6a)."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(ear=0.30)
+    out = None
+    # PERCLOS ~22%: dưới ngưỡng thường, trên ngưỡng mệt mỏi
+    for i in range(400):
+        p.tier1.backend.set_scenario(ear=0.10 if i % 9 < 2 else 0.30)
+        out = p.tier1_fast_stream_check(
+            FRAME, now=i / 10, telematics={"continuous_driving_min": 120})
+    assert out["trigger_reason"] == "T2_perclos_fatigue"
 
 
 def test_yawning_triggers_vlm():
@@ -189,6 +234,18 @@ def test_null_feature_skipped():
     assert not v["is_anomaly"]
 
 
+def test_provisional_baseline_caps_severity(guard):
+    """Baseline provisional -> hạ recommend_rest_now xuống gentle (docs/03)."""
+    strong = {"observation": "looks_more_tired_than_usual",
+              "severity": "recommend_rest_now",
+              "context_slots": {"trip_factor": "none",
+                                "vehicle_state": "stopped"}}
+    out = guard.validate_and_render(strong, "T7_baseline_anomaly",
+                                    max_severity="gentle")
+    assert out == guard.template_bank[
+        "looks_more_tired_than_usual|gentle|none|stopped"]
+
+
 # ----------------------------------------------------------------------
 # Pipeline end-to-end (mock backends)
 # ----------------------------------------------------------------------
@@ -215,7 +272,90 @@ def test_long_driving_gets_guarded_vlm_response():
 def test_vlm_cooldown_prevents_spam():
     p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf", tier1_backend=MockLandmarkBackend())
     p.tier1.backend.set_scenario(ear=0.30)
-    telem = {"continuous_driving_min": 90, "speed_kmh": 40}
+    telem = {"continuous_driving_min": 91, "speed_kmh": 40}
     out1 = p.process_stream_frame(FRAME, telem, now=0.0)
     out2 = p.process_stream_frame(FRAME, telem, now=1.0)  # trong cooldown
     assert out1 is not None and out2 is None
+
+
+def test_t2_t4_instant_alert_never_waits_for_vlm():
+    """T2-T4: frame trigger phải trả cảnh báo tĩnh NGAY, VLM trả frame sau (NC-01)."""
+    import time as time_mod
+
+    class SlowVLM:
+        def generate(self, frame, reason, delta, telem):
+            time_mod.sleep(0.3)  # VLM chậm 300ms — không được chặn frame loop
+            return {"observation": "eyes_heavy", "severity": "gentle",
+                    "context_slots": {"trip_factor": "none",
+                                      "vehicle_state": "moving"}}
+
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.vlm = SlowVLM()
+    # tạo 3 lần ngáp -> T3 trigger
+    t = 0.0
+    for _ in range(3):
+        p.tier1.backend.set_scenario(ear=0.3, mar=0.75)
+        for i in range(25):
+            p.tier1.analyze(FRAME, now=t + i / 10)
+        t += 2.5
+        p.tier1.backend.set_scenario(ear=0.3, mar=0.1)
+        for i in range(10):
+            p.tier1.analyze(FRAME, now=t + i / 10)
+        t += 1.0
+
+    start = time_mod.monotonic()
+    out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=t)
+    elapsed = time_mod.monotonic() - start
+    assert out is not None and "buồn ngủ" in out   # cảnh báo tĩnh tức thời
+    assert elapsed < 0.15                          # không chờ VLM 300ms
+    # kết quả VLM (template eyes_heavy gentle) nổi lên ở frame sau —
+    # trigger còn active nên frame chưa có kết quả vẫn trả cảnh báo tĩnh
+    p.tier1.backend.set_scenario(ear=0.3, mar=0.1)
+    deadline = time_mod.monotonic() + 2.0
+    outputs = []
+    while time_mod.monotonic() < deadline:
+        time_mod.sleep(0.05)
+        t += 0.1
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=t)
+        if out:
+            outputs.append(out)
+        if any("mỏi" in o for o in outputs):
+            break
+    assert any("mỏi" in o for o in outputs)
+
+
+def test_pre_ride_check_helmet_and_weather_gate():
+    """Pre-ride: quai mũ luôn nhắc khi thiếu; khẩu trang chỉ khi nắng bụi (NC-02)."""
+    det = MockObjectDetector(scenario={"helmet_strap": 0.2, "mask": 0.2})
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend(),
+                                       object_detector=det)
+    frames = [FRAME] * 10
+    normal = p.pre_ride_check(frames, {"weather": "normal"})
+    assert any("mũ bảo hiểm" in r for r in normal)
+    assert not any("khẩu trang" in r for r in normal)  # trời thường: không nhắc
+    dusty = p.pre_ride_check(frames, {"weather": "sunny_dusty"})
+    assert any("khẩu trang" in r for r in dusty)
+
+
+def test_end_trip_populates_daily_baseline():
+    """end_trip phải tổng hợp phiên đo hôm nay vào health_daily (NC-08)."""
+    from datetime import datetime, timezone
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    import time as time_mod
+    for s in range(5):
+        p.baseline.add_sample(p.profile_id, int(time_mod.time()) - s * 300, 1,
+                              {"eye_openness": 0.3})
+    p.end_trip()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = p.baseline.db.execute(
+        "SELECT COUNT(*) FROM health_daily WHERE day=?", (today,)).fetchone()
+    assert rows[0] > 0
+
+
+def test_delivery_channel_policy():
+    assert delivery_channel({"speed_kmh": 60}) == "audio_short"
+    assert delivery_channel({"speed_kmh": 10}) == "audio_full"
+    assert delivery_channel({"speed_kmh": 0}) == "audio_and_screen"

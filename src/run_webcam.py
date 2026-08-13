@@ -9,9 +9,9 @@ import argparse
 import time
 
 try:
-    from .pipeline import SafetyAndHealthMonitorPipeline
+    from .pipeline import SafetyAndHealthMonitorPipeline, delivery_channel
 except ImportError:
-    from pipeline import SafetyAndHealthMonitorPipeline
+    from pipeline import SafetyAndHealthMonitorPipeline, delivery_channel
 
 
 def main():
@@ -43,7 +43,11 @@ def main():
         alert = monitor.process_stream_frame(rgb, telematics)
         if alert:
             last_alert = alert
-            print(f"🔊 {alert}")
+            # Chính sách kênh phát theo trạng thái xe (docs/01 §6c):
+            # production đang chạy nhanh chỉ phát audio; overlay ở đây
+            # là công cụ dev để quan sát
+            channel = delivery_channel(telematics)
+            print(f"🔊 [{channel}] {alert}")
 
         cv2.putText(frame_bgr, last_alert[:60], (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

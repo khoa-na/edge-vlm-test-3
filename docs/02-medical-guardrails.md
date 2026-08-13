@@ -54,7 +54,7 @@ BAD (NEVER): any free text, any medical wording, any field outside the schema.
 Điểm thiết kế đáng chú ý:
 
 - **Cho phép rõ ràng (allowlist) quan trọng hơn cấm (denylist)**: prompt định nghĩa chính xác model *được nói gì* (quan sát bề ngoài + khuyến nghị nghỉ ngơi), không chỉ liệt kê điều cấm — thu hẹp không gian đầu ra ngay từ đầu.
-- **Output contract 1 câu theo template** làm đầu ra dễ kiểm soát và dễ kiểm tra ở lớp sau.
+- **Output contract JSON-only** (không phải câu văn) làm đầu ra kiểm tra được bằng máy ở lớp sau — model chọn tình huống, không viết lời.
 - **Few-shot GOOD/BAD** hiệu quả hơn mô tả trừu tượng với model nhỏ 2B.
 
 ## 3. Lớp 2 — Constrained Decoding (kiểm soát tại lúc sinh token)

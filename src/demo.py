@@ -52,11 +52,21 @@ def main():
                      dict(ear=0.10), telem_normal, 3, t)
     t = run_scenario(monitor, backend, "Nhìn điện thoại (T1 — khẩn cấp)",
                      dict(ear=0.30, phone_conf=0.9), telem_normal, 2, t)
-    t = run_scenario(monitor, backend, "Ngáp liên tục (T3 — nhắc nhẹ + VLM)",
-                     dict(ear=0.30, mar=0.75), telem_normal, 8, t)
-    t = run_scenario(monitor, backend,
-                     "Lái >2h trời nóng (T5 — VLM fusion telematics)",
-                     dict(ear=0.30, mar=0.2), telem_long_hot, 2, t)
+    # 3 chu kỳ ngáp thật: MAR cao 2.5s rồi đóng miệng 1s (đếm ngáp là
+    # edge-triggered — chỉ tính khi miệng đóng lại sau >=2s mở)
+    for cycle in range(3):
+        t = run_scenario(monitor, backend, f"Ngáp lần {cycle + 1} (MAR cao 2.5s)",
+                         dict(ear=0.30, mar=0.75), telem_normal, 2.5, t)
+        t = run_scenario(monitor, backend, f"  ... đóng miệng",
+                         dict(ear=0.30, mar=0.10), telem_normal, 1.0, t)
+    # T5 dùng monitor mới: cửa sổ đếm ngáp 10 phút của kịch bản trên còn
+    # active, sẽ che T5 nếu dùng chung state
+    backend2 = MockLandmarkBackend()
+    monitor2 = SafetyAndHealthMonitorPipeline(edge_vlm_path="quantized_vlm.gguf",
+                                              tier1_backend=backend2)
+    run_scenario(monitor2, backend2,
+                 "Lái >2h trời nóng (T5 — VLM fusion telematics)",
+                 dict(ear=0.30, mar=0.2), telem_long_hot, 2, 0.0)
 
     print("\n--- Guardrails: chặn free text vi phạm y tế ---")
     for bad in ["Bạn có dấu hiệu thiếu máu, nên đi khám ngay.",

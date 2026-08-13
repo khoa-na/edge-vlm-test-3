@@ -16,7 +16,7 @@ Camera 5-10 FPS
       │
       ▼
 ┌─────────────────────────────────────────────┐
-│ TIER 1 — Lightweight CV (mọi frame, <20ms)  │
+│ TIER 1 — Lightweight CV (mọi frame, <50ms)  │
 │  • Face Landmark → EAR, MAR, PERCLOS        │
 │  • Head Pose (Euler: pitch/yaw/roll)        │
 │  • Object Detection (phone, helmet, mask)   │

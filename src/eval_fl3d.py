@@ -57,20 +57,23 @@ def main():
 
     root = Path(args.root)
     seqs = load_sequences(root)
+    # Thứ tự tên cố định (không sort theo tỉ lệ nhãn — tránh chọn mẫu thiên
+    # lệch về sequence nhiều sự kiện); mỗi sequence đánh giá TOÀN BỘ frame
     names = sorted(seqs)
-    # ưu tiên sequence có microsleep/yawning để pipeline có gì mà bắt
-    names.sort(key=lambda n: -sum(1 for _, _, s in seqs[n] if s != "alert"))
     if args.limit_seq:
         names = names[: args.limit_seq]
 
     backend = MediaPipeLandmarkBackend()
     confusion = Counter()
-    t0_alerts, microsleep_episodes = 0, 0
     n_frames = 0
+    # Episode-level: 1 episode = chuỗi frame microsleep liên tục đủ dài
+    # (>= 1.5s theo FPS nguồn) — đúng định nghĩa T0 phải bắt được
+    min_episode_frames = int(1.5 * args.fps) + 1
+    episodes_total, episodes_detected, false_t0_frames, alert_frames = 0, 0, 0, 0
 
     for name in names:
         analyzer = Tier1Analyzer(backend=backend)  # reset state mỗi sequence
-        prev_state = "alert"
+        run_len, run_hit = 0, False
         for i, (_, path, label) in enumerate(seqs[name]):
             img = cv2.imread(str(path))
             if img is None:
@@ -78,6 +81,19 @@ def main():
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             out = analyzer.analyze(rgb, now=i / args.fps)
             n_frames += 1
+
+            t0_fired = out["immediate_alert"] == "T0_eyes_closed"
+            if label == "microsleep":
+                run_len += 1
+                run_hit = run_hit or t0_fired
+            else:
+                if run_len >= min_episode_frames:
+                    episodes_total += 1
+                    episodes_detected += run_hit
+                run_len, run_hit = 0, False
+            if label == "alert":
+                alert_frames += 1
+                false_t0_frames += t0_fired
 
             raw = out["raw"]
             # MAR xét trước EAR: ngáp thường kèm nheo/nhắm mắt,
@@ -91,12 +107,10 @@ def main():
             else:
                 pred = "alert"
             confusion[(label, pred)] += 1
-
-            if label == "microsleep" and prev_state != "microsleep":
-                microsleep_episodes += 1
-            if out["immediate_alert"] == "T0_eyes_closed" and label == "microsleep":
-                t0_alerts += 1
-            prev_state = label
+        # đóng episode cuối sequence nếu còn dở
+        if run_len >= min_episode_frames:
+            episodes_total += 1
+            episodes_detected += run_hit
         print(f"  done {name} ({len(seqs[name])} frames)")
 
     labels = ["alert", "microsleep", "yawning"]
@@ -113,8 +127,14 @@ def main():
     correct = sum(confusion[(l, l)] for l in labels)
     total = sum(confusion.values()) or 1
     print(f"\nFrame-level accuracy: {correct / total:.1%}")
-    print(f"Pipeline: {t0_alerts} frame phát cảnh báo T0 trong "
-          f"{microsleep_episodes} đoạn microsleep")
+
+    recall = episodes_detected / episodes_total if episodes_total else 0.0
+    fa_rate = false_t0_frames / alert_frames if alert_frames else 0.0
+    fa_per_hour = fa_rate * args.fps * 3600
+    print(f"\n=== Episode-level (T0, đoạn microsleep >= 1.5s) ===")
+    print(f"Episode recall : {episodes_detected}/{episodes_total} = {recall:.1%}")
+    print(f"False T0       : {false_t0_frames}/{alert_frames} frame alert "
+          f"({fa_rate:.2%}) ~ {fa_per_hour:.0f} frame báo giả/giờ lái")
 
 
 if __name__ == "__main__":

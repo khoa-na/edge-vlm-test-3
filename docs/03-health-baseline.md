@@ -127,7 +127,7 @@ Các quy tắc khác:
 | Storage limitation | Rolling 14 ngày, tự xóa; baseline chỉ giữ mean/std |
 | On-device processing | Không có network call nào trong pipeline; dữ liệu không rời thiết bị |
 | Security | SQLite mã hóa at-rest (SQLCipher / Android EncryptedFile), khóa trong Keystore/TPM |
-| Right to erasure | Nút "Xóa dữ liệu sức khỏe" trong settings → DROP cả 2 bảng, hiệu lực tức thời |
+| Right to erasure | Nút "Xóa dữ liệu sức khỏe" trong settings → DROP cả 3 bảng (`health_samples`, `health_daily`, `user_health_baseline`), hiệu lực tức thời |
 | Consent | Opt-in riêng cho tính năng health trend khi onboarding (tách khỏi consent DMS an toàn); tắt được bất kỳ lúc nào |
 | Transparency | Màn hình settings hiển thị đúng những gì đang lưu (8 con số, ngày gần nhất) |
 

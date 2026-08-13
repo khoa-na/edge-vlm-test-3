@@ -11,6 +11,7 @@ Fail-closed: mọi nhánh lỗi trả về fallback template, không bao giờ t
 
 import json
 import re
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -53,11 +54,14 @@ class MedicalGuardrails:
     # ------------------------------------------------------------------
     # Đường chính: structured output -> template duyệt sẵn
     # ------------------------------------------------------------------
-    def validate_and_render(self, vlm_json: Any, trigger_reason: str) -> str:
+    def validate_and_render(self, vlm_json: Any, trigger_reason: str,
+                            max_severity: Optional[str] = None) -> str:
         """Validate JSON của VLM theo schema enum, render từ template bank.
 
         Mọi vi phạm schema (key lạ, value ngoài enum, không parse được)
         đều fail-closed về fallback template.
+        max_severity="gentle": hạ recommend_rest_now xuống gentle — dùng khi
+        health baseline còn provisional (docs/03: chỉ nhắc mức nhẹ nhất).
         """
         try:
             if isinstance(vlm_json, str):
@@ -79,8 +83,15 @@ class MedicalGuardrails:
             self._audit("schema_reject", trigger_reason, detail=str(e))
             return self._fallback(trigger_reason)
 
+        if max_severity == "gentle" and sev == "recommend_rest_now":
+            sev = "gentle"
+
         key = f"{obs}|{sev}|{trip}|{veh}"
         text = self.template_bank.get(key)
+        if text is None:
+            # thử bản không có trip_factor (vd sau khi hạ severity)
+            key = f"{obs}|{sev}|none|{veh}"
+            text = self.template_bank.get(key)
         if text is None:
             # Tổ hợp hợp lệ nhưng chưa có template — fail-closed
             self._audit("template_missing", trigger_reason, detail=key)
@@ -138,7 +149,15 @@ class MedicalGuardrails:
         return self.fallbacks["default"]
 
     def _audit(self, event: str, trigger_reason: str, detail: Any = None) -> None:
-        # Audit log phục vụ chứng minh tuân thủ — không bao giờ chứa ảnh
-        self.audit_log.append(
-            {"event": event, "trigger": trigger_reason, "detail": detail}
-        )
+        """Audit log chứng minh tuân thủ (docs/02 §4) — không bao giờ chứa ảnh.
+
+        blocked: text bị chặn/thay bằng fallback; passed: text được phát.
+        detail: từ cấm bắt được hoặc template key đã render.
+        """
+        self.audit_log.append({
+            "ts": time.time(),
+            "event": event,
+            "blocked": event not in ("passed", "rendered"),
+            "trigger": trigger_reason,
+            "detail": detail,
+        })

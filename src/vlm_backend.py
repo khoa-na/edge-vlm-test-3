@@ -87,27 +87,51 @@ class MockVLMBackend:
         }
 
 
+# GBNF grammar: enum ĐÓNG ở mức decoder — model không có token nào để viết
+# chữ tự do (docs/02 Lớp 2). Validator trong guardrails.py vẫn là lưới độc lập.
+OUTPUT_GRAMMAR = r'''
+root ::= "{" ws "\"observation\"" ws ":" ws obs "," ws "\"severity\"" ws ":" ws sev "," ws "\"context_slots\"" ws ":" ws slots ws "}"
+slots ::= "{" ws "\"trip_factor\"" ws ":" ws trip "," ws "\"vehicle_state\"" ws ":" ws veh ws "}"
+obs ::= "\"looks_more_tired_than_usual\"" | "\"looks_normal\"" | "\"eyes_heavy\"" | "\"signs_of_long_trip_fatigue\""
+sev ::= "\"none\"" | "\"gentle\"" | "\"recommend_rest_now\""
+trip ::= "\"none\"" | "\"long_drive\"" | "\"hot_weather\"" | "\"long_drive_hot_weather\""
+veh ::= "\"moving\"" | "\"stopped\""
+ws ::= [ \t\n]*
+'''
+
+
 class LlamaCppVLMBackend:
     """Backend thật: model VLM quantized GGUF qua llama-cpp-python.
 
     Dùng: LlamaCppVLMBackend("qwen2-vl-2b-q4.gguf", mmproj="mmproj.gguf")
-    GBNF grammar sinh từ schema enum ép model chỉ trả JSON hợp lệ.
+    mmproj (projector đa phương thức) BẮT BUỘC — không có thì model không
+    nhận ảnh được; thiếu sẽ raise để pipeline fallback mock thay vì chạy mù.
     """
 
     def __init__(self, model_path: str, mmproj: Optional[str] = None,
                  n_ctx: int = 2048):
         from llama_cpp import Llama  # ImportError nếu chưa cài
         from llama_cpp.llama_chat_format import Qwen25VLChatHandler
-        handler = Qwen25VLChatHandler(clip_model_path=mmproj) if mmproj else None
+        if not mmproj:
+            raise ValueError("mmproj is required for image input")
+        handler = Qwen25VLChatHandler(clip_model_path=mmproj)
         self._llm = Llama(model_path=model_path, chat_handler=handler,
                           n_ctx=n_ctx, verbose=False)
+        try:
+            from llama_cpp import LlamaGrammar
+            self._grammar = LlamaGrammar.from_string(OUTPUT_GRAMMAR)
+        except Exception:
+            self._grammar = None  # backend cũ: dựa vào json_object + validator
 
     def generate(self, frame: np.ndarray, trigger_reason: str,
                  delta_text: str, telematics: Dict[str, Any]) -> Dict[str, Any]:
         import base64
         import cv2
-        ok, buf = cv2.imencode(".jpg", frame)
+        # pipeline làm việc bằng RGB; imencode kỳ vọng BGR
+        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         image_uri = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+        kwargs = ({"grammar": self._grammar} if self._grammar
+                  else {"response_format": {"type": "json_object"}})
         out = self._llm.create_chat_completion(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -117,7 +141,6 @@ class LlamaCppVLMBackend:
                      "text": build_user_prompt(trigger_reason, delta_text, telematics)},
                 ]},
             ],
-            response_format={"type": "json_object"},
-            temperature=0.3, max_tokens=80,
+            temperature=0.3, max_tokens=80, **kwargs,
         )
         return json.loads(out["choices"][0]["message"]["content"])

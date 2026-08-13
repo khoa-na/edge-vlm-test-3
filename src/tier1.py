@@ -26,7 +26,10 @@ YAW_TURN_THRESHOLD_DEG = 45.0
 YAW_WINDOW_SEC = 30.0
 YAW_TRIGGER_COUNT = 3
 PERCLOS_WINDOW_SEC = 60.0
+PERCLOS_MIN_WINDOW_SEC = 30.0   # chưa đủ 30s dữ liệu thì không kết luận PERCLOS
 PERCLOS_TRIGGER = 0.25
+PERCLOS_TRIGGER_FATIGUED = 0.20  # ngưỡng nhạy hơn khi lái đêm / lái quá lâu
+FACE_GAP_RESET_SEC = 0.5         # mất mặt quá lâu thì reset các bộ đếm thời gian
 PHONE_CONF_THRESHOLD = 0.5
 PHONE_CONFIRM_FRAMES = 3
 PHONE_RELEASE_FRAMES = 10
@@ -41,8 +44,13 @@ class RawMetrics:
     pitch_deg: float = 0.0      # âm = cúi xuống
     yaw_deg: float = 0.0
     roll_deg: float = 0.0
-    phone_conf: float = 0.0
+    phone_conf: float = 0.0     # backend không có phone detector thì để 0
     landmark_conf: float = 1.0
+    # Feature sức khỏe cho baseline (Khối 3) — None = backend không đo được
+    eye_darkness: Optional[float] = None    # L hốc mắt / L má
+    eye_puffiness: Optional[float] = None   # bề rộng mí dưới / interocular
+    skin_paleness: Optional[float] = None   # a má / a trán
+    lip_color_index: Optional[float] = None # a môi / a má
 
 
 class MockLandmarkBackend:
@@ -123,15 +131,67 @@ class MediaPipeLandmarkBackend:
         pitch = float(-np.degrees(np.arcsin(np.clip(
             ((nose[1] - pts[10][1]) / face_h - 0.45) * 2, -1, 1))))
 
+        health = self._health_features(frame, pts)
         return RawMetrics(face_found=True, ear=(ear_l + ear_r) / 2, mar=mar,
-                          pitch_deg=pitch, yaw_deg=yaw)
+                          pitch_deg=pitch, yaw_deg=yaw, **health)
+
+    # Landmark mốc cho feature sức khỏe (Khối 3)
+    UNDER_EYE = [145, 374]   # mí dưới trái/phải
+    CHEEK = [205, 425]
+    FOREHEAD = [10]
+    LIPS = [13, 14]
+    INTEROCULAR = (33, 263)
+
+    def _health_features(self, frame: np.ndarray, pts: np.ndarray) -> dict:
+        """Trích feature màu/hình học cho health baseline — thống kê Lab trên
+        patch nhỏ quanh landmark, mọi giá trị là TỈ LỆ giữa 2 vùng cùng mặt
+        (tự chuẩn hóa ánh sáng, xem docs/03). Lỗi nào -> None (NULL trong DB).
+        """
+        try:
+            import cv2
+            h, w = frame.shape[:2]
+
+            def patch_lab(idx_list, r=6):
+                vals = []
+                for i in idx_list:
+                    x, y = int(pts[i][0]), int(pts[i][1])
+                    if not (r <= x < w - r and r <= y < h - r):
+                        return None
+                    patch = frame[y - r:y + r, x - r:x + r]
+                    lab = cv2.cvtColor(patch, cv2.COLOR_RGB2Lab)
+                    vals.append(lab.reshape(-1, 3).mean(axis=0))
+                return np.mean(vals, axis=0)  # (L, a, b)
+
+            eye, cheek = patch_lab(self.UNDER_EYE), patch_lab(self.CHEEK)
+            forehead, lips = patch_lab(self.FOREHEAD), patch_lab(self.LIPS)
+            if any(v is None for v in (eye, cheek, forehead, lips)):
+                return {}
+            eps = 1e-6
+            inter = np.linalg.norm(pts[self.INTEROCULAR[0]]
+                                   - pts[self.INTEROCULAR[1]]) + eps
+            # bề rộng vùng mí dưới (mí -> gò má) chuẩn hóa theo interocular
+            puff = np.mean([np.linalg.norm(pts[145] - pts[205]),
+                            np.linalg.norm(pts[374] - pts[425])]) / inter
+            return {
+                "eye_darkness": float(eye[0] / (cheek[0] + eps)),
+                "eye_puffiness": float(puff),
+                "skin_paleness": float(cheek[1] / (forehead[1] + eps)),
+                "lip_color_index": float(lips[1] / (cheek[1] + eps)),
+            }
+        except Exception:
+            return {}
 
 
 @dataclass
 class Tier1Analyzer:
-    """Temporal state machine trên metric thô — phần lõi chống nhiễu."""
+    """Temporal state machine trên metric thô — phần lõi chống nhiễu.
+
+    phone_detector: callable(frame) -> confidence, cắm YOLO INT8 ở production;
+    None thì dùng phone_conf từ backend (mock cung cấp, MediaPipe không có).
+    """
 
     backend: Any = field(default_factory=MockLandmarkBackend)
+    phone_detector: Optional[Any] = None
 
     def __post_init__(self):
         self._eyes_closed_since: Optional[float] = None
@@ -141,11 +201,15 @@ class Tier1Analyzer:
         self._yaw_turn_times: deque = deque()
         self._yaw_in_turn = False
         self._ear_history: deque = deque()      # (ts, closed: bool) cho PERCLOS
+        self._blink_times: deque = deque()      # ts các lần chớp (closed->open)
+        self._prev_closed = False
         self._phone_streak = 0
         self._phone_miss_streak = 0
         self._phone_active = False
+        self._last_face_ts: Optional[float] = None
 
-    def analyze(self, frame: np.ndarray, now: Optional[float] = None) -> Dict[str, Any]:
+    def analyze(self, frame: np.ndarray, now: Optional[float] = None,
+                perclos_threshold: float = PERCLOS_TRIGGER) -> Dict[str, Any]:
         now = time.monotonic() if now is None else now
         m = self.backend.extract(frame)
 
@@ -157,6 +221,7 @@ class Tier1Analyzer:
             "perclos": 0.0,
             "yawn_count_10min": 0,
             "head_turn_count_30s": 0,
+            "blink_rate": None,
             "raw": m,
             "trigger_vlm_needed": False,
             "trigger_reason": None,
@@ -165,8 +230,22 @@ class Tier1Analyzer:
         if not m.face_found:
             return result
 
-        # --- Mắt nhắm liên tục + PERCLOS ---
+        # Mất mặt quá FACE_GAP_RESET_SEC (che khuất, quay hẳn đi) thì reset
+        # các bộ đếm thời gian — tránh cộng dồn khoảng trống thành báo động giả
+        if (self._last_face_ts is not None
+                and now - self._last_face_ts > FACE_GAP_RESET_SEC):
+            self._eyes_closed_since = None
+            self._pitch_down_since = None
+            self._yawn_started = None
+        self._last_face_ts = now
+
+        # --- Mắt nhắm liên tục + PERCLOS + blink rate ---
         closed = m.ear < EAR_CLOSED_THRESHOLD
+        if self._prev_closed and not closed:  # closed->open = 1 lần chớp
+            self._blink_times.append(now)
+        self._prev_closed = closed
+        while self._blink_times and self._blink_times[0] < now - 60.0:
+            self._blink_times.popleft()
         if closed and self._eyes_closed_since is None:
             self._eyes_closed_since = now
         elif not closed:
@@ -177,8 +256,13 @@ class Tier1Analyzer:
         self._ear_history.append((now, closed))
         while self._ear_history and self._ear_history[0][0] < now - PERCLOS_WINDOW_SEC:
             self._ear_history.popleft()
-        if len(self._ear_history) >= 10:
+        window_span = now - self._ear_history[0][0] if self._ear_history else 0.0
+        # Chưa gom đủ 30s dữ liệu thì không kết luận PERCLOS (tránh trigger sớm
+        # từ vài giây đầu); blink rate cũng cần đủ 60s cửa sổ mới có nghĩa
+        if window_span >= PERCLOS_MIN_WINDOW_SEC:
             result["perclos"] = sum(c for _, c in self._ear_history) / len(self._ear_history)
+        if window_span >= 60.0 - 1.0:
+            result["blink_rate"] = float(len(self._blink_times))
 
         # --- Cúi đầu (nhìn điện thoại / gật gù) ---
         if m.pitch_deg < PITCH_DOWN_THRESHOLD_DEG:
@@ -189,7 +273,9 @@ class Tier1Analyzer:
             self._pitch_down_since = None
 
         # --- Phone: confidence + debounce 3 frame vào / 10 frame ra ---
-        if m.phone_conf > PHONE_CONF_THRESHOLD:
+        phone_conf = (self.phone_detector(frame) if self.phone_detector
+                      else m.phone_conf)
+        if phone_conf > PHONE_CONF_THRESHOLD:
             self._phone_streak += 1
             self._phone_miss_streak = 0
             if self._phone_streak >= PHONE_CONFIRM_FRAMES:
@@ -226,7 +312,7 @@ class Tier1Analyzer:
             result["immediate_alert"] = "T0_eyes_closed"
         elif result["using_phone"] or result["head_tilted_down"]:
             result["immediate_alert"] = "T1_phone_or_head_down"
-        elif result["perclos"] > PERCLOS_TRIGGER:
+        elif result["perclos"] > perclos_threshold:
             result["trigger_vlm_needed"] = True
             result["trigger_reason"] = "T2_perclos_fatigue"
         elif result["yawn_count_10min"] >= YAWN_TRIGGER_COUNT:
