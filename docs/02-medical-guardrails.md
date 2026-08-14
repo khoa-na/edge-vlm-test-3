@@ -2,9 +2,9 @@
 
 ## 1. Mô hình mối đe dọa
 
-VLM thấy "mặt tái, môi tím, mắt lờ đờ" sẽ có xu hướng tự suy ra chẩn đoán ("dấu hiệu thiếu máu", "tụt huyết áp"). Vi phạm này mang rủi ro pháp lý (thiết bị không phải thiết bị y tế được cấp phép) và rủi ro an toàn (chẩn đoán sai làm người dùng chủ quan hoặc hoảng loạn).
+VLM nhìn thấy "mặt tái, môi tím, mắt lờ đờ" sẽ có xu hướng tự suy ra chẩn đoán — "dấu hiệu thiếu máu", "tụt huyết áp". Để lọt một câu như vậy là dính cả rủi ro pháp lý (thiết bị không phải thiết bị y tế được cấp phép) lẫn rủi ro an toàn (chẩn đoán sai làm người dùng chủ quan hoặc hoảng loạn).
 
-**Nguyên tắc: không tin bất kỳ lớp nào 100%. Phòng thủ theo chiều sâu (defense-in-depth), lớp cuối cùng là deterministic — không phụ thuộc xác suất của model.**
+Nguyên tắc phòng thủ: không tin bất kỳ lớp nào 100%. Phòng thủ theo chiều sâu, và lớp cuối cùng phải là deterministic — không phụ thuộc xác suất của model.
 
 ```
 VLM input ──► [Lớp 1: System Prompt] ──► [Lớp 2: Constrained Decoding]
@@ -49,17 +49,13 @@ GOOD: {"observation":"looks_more_tired_than_usual","severity":"recommend_rest_no
 BAD (NEVER): any free text, any medical wording, any field outside the schema.
 ```
 
-(Ví dụ GOOD/BAD ở mức *lời văn* — "Hôm nay trông bạn có vẻ hơi mệt..." vs "Bạn có dấu hiệu thiếu máu" — chuyển xuống tài liệu template bank, vì lời văn giờ thuộc trách nhiệm template, không thuộc model.)
+(Ví dụ GOOD/BAD ở mức lời văn — "Hôm nay trông bạn có vẻ hơi mệt..." so với "Bạn có dấu hiệu thiếu máu" — nằm bên tài liệu template bank, vì lời văn giờ thuộc trách nhiệm template chứ không thuộc model.)
 
-Điểm thiết kế đáng chú ý:
-
-- **Cho phép rõ ràng (allowlist) quan trọng hơn cấm (denylist)**: prompt định nghĩa chính xác model *được nói gì* (quan sát bề ngoài + khuyến nghị nghỉ ngơi), không chỉ liệt kê điều cấm — thu hẹp không gian đầu ra ngay từ đầu.
-- **Output contract JSON-only** (không phải câu văn) làm đầu ra kiểm tra được bằng máy ở lớp sau — model chọn tình huống, không viết lời.
-- **Few-shot GOOD/BAD** hiệu quả hơn mô tả trừu tượng với model nhỏ 2B.
+Vài lựa chọn trong prompt này đáng giải thích. Tôi định nghĩa allowlist (model được nói gì: quan sát bề ngoài, khuyến nghị nghỉ ngơi) thay vì chỉ liệt kê điều cấm, vì cho phép rõ ràng thu hẹp không gian đầu ra ngay từ đầu — denylist thì luôn thiếu. Output contract là JSON chứ không phải câu văn, để đầu ra kiểm tra được bằng máy ở lớp sau: model chọn tình huống, không viết lời. Và few-shot GOOD/BAD nằm đó vì với model nhỏ 2B, một cặp ví dụ cụ thể ăn đứt cả đoạn mô tả trừu tượng.
 
 ## 3. Lớp 2 — Constrained Decoding (kiểm soát tại lúc sinh token)
 
-Prompt là xác suất — model nhỏ quantized vẫn có thể trượt. Lớp này **đóng hoàn toàn không gian đầu ra**: VLM không được sinh câu tự do tới người dùng. VLM chỉ được xuất **JSON theo schema enum cố định** — chọn *ý định*, không viết *lời văn*:
+Prompt là xác suất — model nhỏ quantized vẫn có thể trượt. Lớp này đóng hoàn toàn không gian đầu ra: VLM không được sinh câu tự do tới người dùng, chỉ được xuất JSON theo schema enum cố định. Model chọn ý định, không viết lời văn:
 
 ```json
 {
@@ -73,18 +69,18 @@ Prompt là xác suất — model nhỏ quantized vẫn có thể trượt. Lớp
 }
 ```
 
-Cơ chế ép schema:
+Bốn cơ chế ép schema, xếp theo thứ tự từ decoder ra ngoài:
 
-1. **Grammar constraint (GBNF — llama.cpp)**: grammar sinh tự động từ JSON schema trên, mọi giá trị là enum đóng — model **không có token nào** để viết chữ tự do. Đây là ràng buộc thực thi tại decoder, không phải quy ước trong prompt.
-2. **Deterministic validator sau decode**: parse JSON, từ chối mọi key/value ngoài schema (kể cả khi grammar lỗi hoặc backend không hỗ trợ GBNF — validator là lưới độc lập).
-3. **Renderer bằng code**: ánh xạ `(observation, severity, trip_factor, vehicle_state)` → 1 câu trong **ngân hàng template đã duyệt trước** (~20–30 câu, viết bởi người, duyệt bởi product/pháp lý). Lời văn tới người dùng do người viết 100%, model chỉ chọn tình huống.
-4. **Cấu hình sampling bảo thủ**: `temperature ≤ 0.3`, `max_tokens ≈ 80` — đủ cho JSON, không hơn.
+1. Grammar constraint (GBNF của llama.cpp): grammar sinh tự động từ JSON schema trên, mọi giá trị là enum đóng — model không có token nào để viết chữ tự do. Đây là ràng buộc thực thi tại decoder, không phải quy ước trong prompt.
+2. Validator tất định sau decode: parse JSON, từ chối mọi key/value ngoài schema. Validator là lưới độc lập, vẫn đứng đó kể cả khi grammar lỗi hoặc backend không hỗ trợ GBNF.
+3. Renderer bằng code: ánh xạ `(observation, severity, trip_factor, vehicle_state)` sang một câu trong ngân hàng template đã duyệt trước — khoảng 20–30 câu, người viết, product và pháp lý duyệt. Lời văn tới người dùng do người viết 100%, model chỉ chọn tình huống.
+4. Sampling bảo thủ: `temperature ≤ 0.3`, `max_tokens ≈ 80` — đủ cho JSON, không hơn.
 
-Chấp nhận đánh đổi: lời nhắc kém đa dạng hơn free text. Bù bằng ngân hàng template đủ lớn và biến thể ngẫu nhiên (chọn 1 trong 3 câu cùng nghĩa) — đa dạng nằm ở phía tất định, không phải phía model.
+Đánh đổi phải chấp nhận: lời nhắc kém đa dạng hơn free text. Bù lại bằng ngân hàng template đủ lớn và biến thể ngẫu nhiên (chọn một trong ba câu cùng nghĩa) — tức là đưa phần đa dạng về phía tất định, không phải phía model.
 
 ## 4. Lớp 3 — Deterministic Rule-based Post-filter (lưới an toàn thứ hai)
 
-Với kiến trúc structured output ở Lớp 2, text tới người dùng luôn là template duyệt sẵn — về nguyên tắc không cần lọc nữa. Post-filter vẫn giữ vì 2 lý do: (1) hệ thống có thể được cấu hình chạy **free-text mode** khi thử nghiệm/so sánh chất lượng; (2) phòng thủ chiều sâu — bảo vệ cả trường hợp ai đó sửa template bank sai quy trình. Lọc **mọi** text trước khi ra loa, bất kể nguồn:
+Với structured output ở Lớp 2, text tới người dùng luôn là template duyệt sẵn — về nguyên tắc không cần lọc nữa. Nhưng post-filter vẫn giữ, vì hai lý do: hệ thống có thể được cấu hình chạy free-text mode khi thử nghiệm so sánh chất lượng, và phòng thủ chiều sâu cần một lưới cho cả trường hợp ai đó sửa template bank sai quy trình. Filter quét mọi text trước khi ra loa, bất kể nguồn:
 
 ```
 raw_text → chuẩn hóa (lowercase, bỏ dấu cách thừa, NFC normalize)
@@ -96,12 +92,12 @@ raw_text → chuẩn hóa (lowercase, bỏ dấu cách thừa, NFC normalize)
          → pass → phát ra loa/màn hình + ghi audit log
 ```
 
-Quy tắc quan trọng:
+Mấy quy tắc đi kèm:
 
-- **Không sửa từng phần câu** (không thay từ cấm bằng từ khác rồi giữ phần còn lại) — câu bị vá dễ giữ nguyên *hàm ý* chẩn đoán. Vi phạm = vứt cả câu, dùng template.
-- **Fail-closed**: mọi lỗi runtime (VLM timeout, filter exception, text rỗng) đều trả về template an toàn, không bao giờ trả raw output.
-- **Banned list là config** (file JSON riêng), đội pháp lý/product cập nhật được không cần sửa code; mỗi bản phát hành kèm bộ test tự động: chạy N câu đầu ra mẫu chứa từ cấm qua filter, yêu cầu 100% bị chặn.
-- **Audit log**: ghi lại (timestamp, trigger_reason, raw đã bị chặn hay pass, template dùng) — không ghi ảnh — phục vụ chứng minh tuân thủ.
+- Không sửa từng phần câu (không thay từ cấm bằng từ khác rồi giữ phần còn lại) — câu bị vá rất dễ giữ nguyên hàm ý chẩn đoán. Vi phạm là vứt cả câu, dùng template.
+- Fail-closed: mọi lỗi runtime (VLM timeout, filter exception, text rỗng) đều trả về template an toàn, không bao giờ trả raw output.
+- Banned list là config (file JSON riêng) để đội pháp lý/product cập nhật được mà không sửa code. Mỗi bản phát hành kèm bộ test tự động: bắn N câu mẫu chứa từ cấm qua filter, yêu cầu chặn 100%.
+- Audit log ghi lại timestamp, trigger_reason, raw bị chặn hay pass, template nào được dùng — không ghi ảnh — để chứng minh tuân thủ khi cần.
 
 ## 5. Lớp 4 — Safe Fallback Templates
 
@@ -113,19 +109,19 @@ Khi Lớp 3 chặn hoặc hệ thống lỗi, chọn template theo `trigger_reas
 | Lái xe liên tục lâu | "Bạn đã lái xe khá lâu rồi, dừng chân thư giãn một chút cho tỉnh táo nhé." |
 | Mặc định / lỗi hệ thống | "Bạn nhớ giữ sức khỏe và lái xe cẩn thận nhé." |
 
-**Phạm vi guardrail — làm rõ với kênh cảnh báo Tier 1**: cảnh báo khẩn cấp của Tier 1 (buzzer, TTS pre-recorded như "Hãy tập trung lái xe!") là tài sản tĩnh duyệt sẵn, không phải text do model sinh — không thể vi phạm y tế theo định nghĩa, nên không đi qua guardrail và không bị VLM làm chậm. Guardrail bao trọn kênh còn lại: **mọi text có nguồn gốc từ model**.
+Một điểm cần làm rõ về phạm vi guardrail so với kênh cảnh báo Tier 1: cảnh báo khẩn cấp của Tier 1 (buzzer, TTS pre-recorded kiểu "Hãy tập trung lái xe!") là tài sản tĩnh duyệt sẵn, không phải text model sinh — theo định nghĩa thì không thể vi phạm y tế, nên không đi qua guardrail và không bị VLM làm chậm. Guardrail bao trọn phần còn lại: mọi text có nguồn gốc từ model.
 
 ## 6. Vì sao tổ hợp này bảo đảm "không bao giờ vi phạm"
 
-Luận điểm cốt lõi: **lời văn tới người dùng không bao giờ do model viết.** Model chỉ chọn một điểm trong không gian hữu hạn `observation × severity × context_slots` (~vài chục tổ hợp), mỗi tổ hợp ánh xạ tất định sang câu người viết đã duyệt. Không gian vi phạm y tế bị loại từ lúc thiết kế template bank, không phải bị "lọc" lúc runtime.
+Điểm mấu chốt nằm ở chỗ lời văn tới người dùng không bao giờ do model viết. Model chỉ chọn một điểm trong không gian hữu hạn `observation × severity × context_slots` — vài chục tổ hợp — và mỗi tổ hợp ánh xạ tất định sang một câu người viết đã duyệt. Không gian vi phạm y tế bị loại từ lúc thiết kế template bank, chứ không phải bị "lọc" lúc runtime.
 
 | Lớp | Bản chất | Vai trò |
 |---|---|---|
-| 1. System Prompt | Xác suất | Nâng chất lượng lựa chọn intent (chọn đúng mức severity), không gánh trách nhiệm an toàn |
-| 2. Schema-constrained output + validator + renderer | **Tất định** | **Lớp bảo đảm chính**: model không có kênh phát free text |
-| 3. Post-filter banned list | **Tất định** | Lưới thứ hai cho free-text mode thử nghiệm và lỗi quy trình template |
-| 4. Fallback template | **Tất định** | Mọi nhánh lỗi (timeout, JSON hỏng, validator reject) đều đổ về đây |
+| 1. System prompt | Xác suất | Nâng chất lượng lựa chọn intent (chọn đúng mức severity), không gánh trách nhiệm an toàn |
+| 2. Schema-constrained output + validator + renderer | Tất định | Lớp bảo đảm chính: model không có kênh phát free text |
+| 3. Post-filter banned list | Tất định | Lưới thứ hai cho free-text mode thử nghiệm và lỗi quy trình template |
+| 4. Fallback template | Tất định | Mọi nhánh lỗi (timeout, JSON hỏng, validator reject) đều đổ về đây |
 
-So sánh với phương án chỉ dùng banned-list filter trên free text: filter từ khóa không bao giờ đóng được không gian diễn đạt vòng ("cơ thể bạn đang thiếu sắt" không chứa từ cấm nào) — nên free text **không thể** đạt cam kết "không bao giờ". Structured output đạt được vì đã đổi bài toán: từ *kiểm duyệt ngôn ngữ tự nhiên* (mở, không quyết định được) sang *chọn phần tử trong tập đóng* (kiểm chứng được bằng review từng template một lần duy nhất).
+So với phương án chỉ dùng banned-list filter trên free text thì khác biệt là căn bản: filter từ khóa không bao giờ đóng được không gian diễn đạt vòng — "cơ thể bạn đang thiếu sắt" không chứa từ cấm nào cả. Free text vì thế không thể đạt cam kết "không bao giờ". Structured output đạt được vì đã đổi hẳn bài toán: từ kiểm duyệt ngôn ngữ tự nhiên (không gian mở, không quyết định được) sang chọn phần tử trong tập đóng (kiểm chứng được bằng cách review từng template đúng một lần).
 
-Red-team định kỳ vẫn chạy (bộ ảnh "trông ốm" + prompt injection thử ép model thoát schema) — mục tiêu kiểm chứng validator và đo chất lượng chọn intent, không phải vá lỗ hổng ngôn ngữ.
+Red-team định kỳ vẫn chạy — bộ ảnh "trông ốm" cộng prompt injection thử ép model thoát schema — nhưng mục tiêu là kiểm chứng validator và đo chất lượng chọn intent, không phải vá lỗ hổng ngôn ngữ.
