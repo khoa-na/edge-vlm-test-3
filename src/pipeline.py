@@ -248,12 +248,14 @@ class SafetyAndHealthMonitorPipeline:
         if pending:
             return pending
 
-        # 4. T2-T4: nhắc nhẹ tức thời NGAY; VLM chạy nền, kết quả frame sau
+        # 4. T2-T4: nhắc nhẹ tức thời NGAY; VLM chạy nền, kết quả frame sau.
+        # Câu nhắc tĩnh cũng đi qua cooldown: PERCLOS/ngáp là TRẠNG THÁI kéo
+        # dài nhiều phút — không cooldown thì frame nào cũng lặp lại cùng câu
         if t1["trigger_vlm_needed"]:
             reason = t1["trigger_reason"]
             if self._cooldown_ok(reason, now):
                 self._start_async_vlm(frame, reason, telematics)
-            return IMMEDIATE_ALERTS.get(reason)
+                return IMMEDIATE_ALERTS.get(reason)
 
         # 5. T5: lái liên tục > 60 phút (telematics thuần; không khẩn cấp nên
         # gọi đồng bộ được, nhưng vẫn không nằm trên safety path)

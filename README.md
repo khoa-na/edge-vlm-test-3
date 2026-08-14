@@ -5,7 +5,7 @@ Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3*
 ## Kết quả nổi bật
 
 - **Chạy model thật, không chỉ thiết kế**: Tier 1 dùng MediaPipe FaceLandmarker, Tier 2 dùng **Qwen3.5-2B Q4** qua llama-server — kiểm chứng end-to-end trên frame cabin thật.
-- **Đánh giá định lượng trên dataset FL3D** (20,806 frame có nhãn): episode recall **85%** trên các đoạn ngủ gật ≥ 1.5s, false-alarm **0.67%** frame alert, kèm mục khai báo giới hạn đánh giá.
+- **Đánh giá định lượng trên dataset FL3D** (20,806 frame có nhãn): episode recall **85%** trên các đoạn ngủ gật ≥ 1.5s, false-alarm **0.65%** frame alert, kèm mục khai báo giới hạn đánh giá.
 - **Guardrails y tế kiểu "không thể vi phạm"**: VLM chỉ trả JSON enum đóng (ép grammar tại decoder), lời văn tới người dùng 100% từ template bank người viết đã duyệt — không tồn tại kênh free text.
 - **34 unit test** phủ trigger logic, guardrails, baseline, async latency, phone detector, TTS manifest; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
 - **Phone detection thật (YOLO26n) + cảnh báo TTS tiếng Việt offline (Piper)**: Tier 1 đầy đủ MediaPipe + YOLO chạy ~31ms/frame CPU; mọi câu ra loa là WAV pre-render từ tập đóng duyệt sẵn — không synthesize runtime.

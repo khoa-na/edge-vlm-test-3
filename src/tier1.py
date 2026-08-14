@@ -33,6 +33,7 @@ FACE_GAP_RESET_SEC = 0.5         # mất mặt quá lâu thì reset các bộ đ
 PHONE_CONF_THRESHOLD = 0.5
 PHONE_CONFIRM_FRAMES = 3
 PHONE_RELEASE_FRAMES = 10
+EAR_VALID_YAW_DEG = 45.0  # quá góc này landmark mắt/miệng không đáng tin
 
 
 @dataclass
@@ -270,7 +271,17 @@ class Tier1Analyzer:
             result["raw"] = m
 
         # --- Mắt nhắm liên tục + PERCLOS + blink rate ---
-        closed = m.ear < EAR_CLOSED_THRESHOLD
+        # EAR/MAR chỉ đáng tin khi mặt gần chính diện: quay đầu quá
+        # EAR_VALID_YAW_DEG thì landmark mắt/miệng bị "dẹt" theo phối cảnh,
+        # mắt mở cũng đo như nhắm — frame đó coi là KHÔNG có dữ liệu mắt
+        # (không đếm vào closed/PERCLOS/blink/yawn), tránh báo buồn ngủ oan
+        # khi tài xế chỉ đang quay đầu (đường quay đầu đã có bộ đếm yaw riêng)
+        frontal = abs(m.yaw_deg) <= EAR_VALID_YAW_DEG
+        if not frontal:
+            self._eyes_closed_since = None
+            self._prev_closed = False
+            self._yawn_started = None
+        closed = frontal and m.ear < EAR_CLOSED_THRESHOLD
         if self._prev_closed and not closed:  # closed->open = 1 lần chớp
             self._blink_times.append(now)
         self._prev_closed = closed
@@ -283,7 +294,8 @@ class Tier1Analyzer:
         if self._eyes_closed_since is not None:
             result["eyes_closed_duration_sec"] = now - self._eyes_closed_since
 
-        self._ear_history.append((now, closed))
+        if frontal:
+            self._ear_history.append((now, closed))
         while self._ear_history and self._ear_history[0][0] < now - PERCLOS_WINDOW_SEC:
             self._ear_history.popleft()
         window_span = now - self._ear_history[0][0] if self._ear_history else 0.0
@@ -317,8 +329,8 @@ class Tier1Analyzer:
                 self._phone_active = False
         result["using_phone"] = self._phone_active
 
-        # --- Ngáp: MAR cao kéo dài >= 2s = 1 lần ---
-        if m.mar > MAR_YAWN_THRESHOLD:
+        # --- Ngáp: MAR cao kéo dài >= 2s = 1 lần (chỉ khi mặt chính diện) ---
+        if frontal and m.mar > MAR_YAWN_THRESHOLD:
             self._yawn_started = self._yawn_started or now
         else:
             if self._yawn_started and now - self._yawn_started >= YAWN_MIN_DURATION_SEC:

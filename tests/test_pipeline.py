@@ -465,3 +465,39 @@ def test_pose_calibration_disabled_by_default():
     out = _run_frames(analyzer, backend, dict(pitch_deg=-30.0), seconds=2.0)
     assert out["head_tilted_down"] is True
     assert out["raw"].pitch_deg == -30.0
+
+
+def test_ear_gated_when_head_turned():
+    """Quay đầu >35°: EAR không đáng tin — không đếm nhắm mắt/PERCLOS,
+    không nổ T0/T2 oan; bộ đếm quay đầu vẫn chạy bình thường."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend)
+    # 40s "mắt nhắm" nhưng đầu đang quay 60° — EAR là artifact phối cảnh
+    out = _run_frames(analyzer, backend, dict(ear=0.05, yaw_deg=60.0),
+                      seconds=40.0)
+    assert out["immediate_alert"] is None
+    assert out["eyes_closed_duration_sec"] == 0.0
+    assert out["perclos"] == 0.0
+    # Về chính diện mắt nhắm thật -> vẫn nổ T0 như thường
+    out = _run_frames(analyzer, backend, dict(ear=0.05, yaw_deg=0.0),
+                      seconds=2.0, t0=40.0)
+    assert out["immediate_alert"] == "T0_eyes_closed"
+
+
+def test_static_reminder_respects_cooldown():
+    """PERCLOS là trạng thái kéo dài — câu nhắc tĩnh chỉ phát 1 lần mỗi
+    cooldown, không lặp mỗi frame."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(ear=0.10)  # nhắm hờ liên tục -> PERCLOS cao
+    # chạy 35s cho đủ cửa sổ PERCLOS; T0 nổ trước (nhắm liên tục) nên
+    # dùng kịch bản chớp: 2 frame nhắm 1 frame mở
+    alerts = []
+    for i in range(400):
+        ear = 0.10 if i % 3 else 0.30
+        p.tier1.backend.set_scenario(ear=ear)
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=i / 10)
+        if out:
+            alerts.append((i / 10, out))
+    perclos_alerts = [a for _, a in alerts if "buồn ngủ" in a]
+    assert len(perclos_alerts) <= 1  # 40s < cooldown 180s -> tối đa 1 lần
