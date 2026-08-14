@@ -124,10 +124,16 @@ def main():
             wav = tts_manifest.get(alert.strip())
             if wav is not None:
                 # 1 slot như AlertSpeaker: câu trước chưa đọc xong thì câu
-                # mới không chèn đè (ước lượng theo kích thước WAV 22kHz)
-                if not audio_events or ts >= audio_events[-1][0] + (
-                        audio_events[-1][1].stat().st_size / (22050 * 2)):
+                # thường không chèn đè (ước lượng theo kích thước WAV 22kHz);
+                # riêng câu KHẨN CẤP (T0/T1, prefix "CẢNH BÁO") không được
+                # phép rơi im lặng — xếp hàng phát ngay khi loa rảnh
+                last_end = (audio_events[-1][0]
+                            + audio_events[-1][1].stat().st_size / (22050 * 2)
+                            if audio_events else 0.0)
+                if ts >= last_end:
                     audio_events.append((ts, wav))
+                elif alert.startswith("CẢNH BÁO"):
+                    audio_events.append((last_end, wav))
         if alert:
             alert_banner, banner_until = alert, ts + 2.0  # giữ banner 2s
         last = alert

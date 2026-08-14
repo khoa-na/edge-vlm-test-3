@@ -527,3 +527,16 @@ def test_t2_cooldown_does_not_mask_t4():
         if out:
             alerts.append(out)
     assert any("quan sát phía trước" in a for a in alerts), alerts
+
+
+def test_t5_long_driving_reminds_even_when_face_looks_normal():
+    """T5 là trigger telematics (nhắc nghỉ theo luật >60'): VLM thấy mặt
+    tươi tỉnh (looks_normal) vẫn phải nhắc nghỉ mức nhẹ, không im lặng."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.vlm.generate = lambda *a, **k: {"observation": "looks_normal",
+                                      "severity": "none"}
+    out = p.tier2_run_vlm_context_analysis(
+        FRAME, "T5_long_driving",
+        {"continuous_driving_min": 65, "speed_kmh": 45, "ambient_temp_c": 30})
+    assert out is not None and "nghỉ" in out, out

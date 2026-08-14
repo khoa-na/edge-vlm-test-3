@@ -188,18 +188,28 @@ class SafetyAndHealthMonitorPipeline:
             vlm_json = None  # fail-closed: validator sẽ đổ về fallback
         # context_slots là FACT suy từ telematics — code điền tất định, model
         # chỉ được quyết observation + severity (phần cần nhìn ảnh)
+        speed = telematics.get("speed_kmh", 0)
+        long_drive = telematics.get("continuous_driving_min", 0) > LONG_DRIVE_TRIGGER_MIN
+        hot = telematics.get("ambient_temp_c", 25) >= 33
+        slots = {
+            "trip_factor": ("long_drive_hot_weather" if long_drive and hot
+                            else "long_drive" if long_drive
+                            else "hot_weather" if hot else "none"),
+            "vehicle_state": "moving" if speed > 3 else "stopped",
+        }
         if isinstance(vlm_json, dict):
-            speed = telematics.get("speed_kmh", 0)
-            long_drive = telematics.get("continuous_driving_min", 0) > LONG_DRIVE_TRIGGER_MIN
-            hot = telematics.get("ambient_temp_c", 25) >= 33
-            vlm_json["context_slots"] = {
-                "trip_factor": ("long_drive_hot_weather" if long_drive and hot
-                                else "long_drive" if long_drive
-                                else "hot_weather" if hot else "none"),
-                "vehicle_state": "moving" if speed > 3 else "stopped",
-            }
+            vlm_json["context_slots"] = slots
         rendered = self.guardrails.validate_and_render(
             vlm_json, trigger_reason, max_severity=max_severity)
+        if not rendered and trigger_reason == "T5_long_driving":
+            # T5 đến từ telematics: lái > 60' thì luôn nhắc nghỉ tối thiểu
+            # mức nhẹ (nhắc nghỉ theo luật), kể cả khi VLM thấy mặt còn
+            # tươi — khuôn mặt chỉ quyết định NÂNG mức độ câu, không quyết
+            # định có nhắc hay không
+            rendered = self.guardrails.validate_and_render(
+                {"observation": "signs_of_long_trip_fatigue",
+                 "severity": "gentle", "context_slots": slots},
+                trigger_reason)
         if not rendered:  # looks_normal — không nhắc gì
             return None
         return self.enforce_medical_guardrails(rendered, trigger_reason)
