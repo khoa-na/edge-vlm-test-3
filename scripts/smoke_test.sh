@@ -9,6 +9,8 @@ if [[ -n "${PYTHON_BIN:-}" ]]; then
   PY="${PYTHON_BIN}"
 elif [[ -x ".venv/bin/python" ]]; then
   PY=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PY="python3"
 else
   PY="python"
 fi

@@ -76,6 +76,9 @@ MUST_BLOCK: List[str] = [
     # chèn khoảng trắng/ký tự né lọc thô
     "Bạn bị  bệnh   tim mạch nặng rồi.",
     "Chỉ số huyết  áp 150 / 95 nhé.",
+    "Bạn có vẻ thiếu   máu.",
+    "Huyết\táp của bạn có vẻ thấp.",
+    "Bạn cần điều\ntrị sớm.",
     # diễn đạt vòng nhưng vẫn dính từ cấm
     "Cơ thể bạn đang có triệu chứng của bệnh lý nghiêm trọng.",
     "Đây là dấu hiệu của một chứng rối loạn thần kinh.",

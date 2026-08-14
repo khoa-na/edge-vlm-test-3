@@ -131,7 +131,7 @@ def main():
     recall = episodes_detected / episodes_total if episodes_total else 0.0
     fa_rate = false_t0_frames / alert_frames if alert_frames else 0.0
     fa_per_hour = fa_rate * args.fps * 3600
-    print(f"\n=== Episode-level (T0, đoạn microsleep >= 1.5s) ===")
+    print("\n=== Episode-level (T0, đoạn microsleep >= 1.5s) ===")
     print(f"Episode recall : {episodes_detected}/{episodes_total} = {recall:.1%}")
     print(f"False T0       : {false_t0_frames}/{alert_frames} frame alert "
           f"({fa_rate:.2%}) ~ {fa_per_hour:.0f} frame báo giả/giờ lái")

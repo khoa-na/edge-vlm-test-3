@@ -18,6 +18,7 @@ from pipeline import (MockObjectDetector, SafetyAndHealthMonitorPipeline,
 from tier1 import MockLandmarkBackend, Tier1Analyzer
 
 FRAME = np.zeros((480, 640, 3), dtype=np.uint8)
+HEALTH_FRAME = np.full((480, 640, 3), 128, dtype=np.uint8)
 
 
 # ----------------------------------------------------------------------
@@ -53,7 +54,18 @@ def test_phone_needs_3_consecutive_frames():
     r2 = analyzer.analyze(FRAME, now=0.1)
     r3 = analyzer.analyze(FRAME, now=0.2)
     assert not r1["using_phone"] and not r2["using_phone"]
-    assert r3["using_phone"] and r3["immediate_alert"] == "T1_phone_or_head_down"
+    assert r3["using_phone"] and r3["immediate_alert"] == "T1_phone"
+
+
+def test_phone_detector_still_runs_when_face_is_missing():
+    backend = MockLandmarkBackend()
+    backend.set_scenario(face_found=False)
+    analyzer = Tier1Analyzer(backend=backend, phone_detector=lambda frame: 0.9)
+    out = None
+    for i in range(3):
+        out = analyzer.analyze(FRAME, now=i / 10)
+    assert out["using_phone"]
+    assert out["immediate_alert"] == "T1_phone"
 
 
 def test_perclos_needs_30s_of_data():
@@ -130,6 +142,15 @@ def test_banned_term_replaced_entirely(guard):
 def test_banned_term_without_diacritics_caught(guard):
     out = guard.enforce("Huyet ap cua ban hoi thap.", "default")
     assert out == guard.fallbacks["default"]
+
+
+@pytest.mark.parametrize("text", [
+    "Bạn có vẻ thiếu   máu.",
+    "Huyết\táp của bạn có vẻ thấp.",
+    "Bạn cần điều\ntrị sớm.",
+])
+def test_banned_terms_with_obfuscated_whitespace_are_caught(guard, text):
+    assert guard.enforce(text, "T7_baseline_anomaly") == guard.fallbacks["fatigue"]
 
 
 def test_all_banned_terms_blocked(guard):
@@ -218,6 +239,17 @@ def test_single_strong_feature_needs_persistence():
     assert not v1["is_anomaly"]
     v2 = hb.check_anomaly(1, 1, {"eye_openness": 0.10})  # phiên 2 liên tiếp: cờ
     assert v2["is_anomaly"]
+
+
+def test_zero_variance_baseline_uses_measurement_noise_floor():
+    hb = HealthBaseline()
+    _seed_baseline(hb, days=7, features=lambda _: {
+        "eye_openness": 0.30, "perclos": 0.05,
+    })
+    verdict = hb.check_anomaly(
+        1, 1, {"eye_openness": 0.299, "perclos": 0.0501}
+    )
+    assert not verdict["is_anomaly"]
 
 
 def test_cold_start_needs_3_days():
@@ -384,7 +416,7 @@ def test_t7_health_anomaly_vlm_never_blocks_frame_loop():
         "delta_text": "eye_openness lệch 2.5 sigma theo hướng xấu",
     }
     start = time_mod.monotonic()
-    out = p.process_stream_frame(FRAME, {"speed_kmh": 45}, now=300.0)
+    out = p.process_stream_frame(HEALTH_FRAME, {"speed_kmh": 45}, now=300.0)
     elapsed = time_mod.monotonic() - start
     assert out == p.guardrails.fallbacks["fatigue"]
     assert elapsed < 0.15
@@ -397,6 +429,29 @@ def test_periodic_health_skips_low_quality_session():
     out = p.process_stream_frame(FRAME, {"speed_kmh": 0}, now=300.0)
     count = p.baseline.db.execute("SELECT COUNT(*) FROM health_samples").fetchone()[0]
     assert out is None and count == 0
+
+
+def test_periodic_health_skips_dark_frame():
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(ear=0.30)
+    out = p.process_stream_frame(FRAME, {"speed_kmh": 0}, now=300.0)
+    count = p.baseline.db.execute("SELECT COUNT(*) FROM health_samples").fetchone()[0]
+    assert out is None and count == 0
+
+
+def test_health_sample_derives_light_bucket_and_skips_immature_rates():
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(
+        ear=0.30, eye_darkness=0.9, eye_puffiness=0.2,
+        skin_paleness=1.0, lip_color_index=1.0,
+    )
+    p.process_stream_frame(HEALTH_FRAME, {"speed_kmh": 0}, now=300.0)
+    row = p.baseline.db.execute(
+        "SELECT light_bucket, perclos, yawn_rate FROM health_samples"
+    ).fetchone()
+    assert row == (2, None, None)
 
 
 def test_t2_t4_instant_alert_never_waits_for_vlm():
@@ -600,6 +655,31 @@ def test_speaker_critical_alert_preempts_busy_reminder(monkeypatch):
     assert events == []
     assert sp.play("CẢNH BÁO: tập trung") is True
     assert [name for name, _ in events] == ["stop", "join", "start"]
+
+
+def test_speaker_does_not_restart_same_busy_critical_alert():
+    import threading
+    import audio_alerts
+
+    events = []
+
+    class BusyThread:
+        def is_alive(self):
+            return True
+
+    class FakeSD:
+        def stop(self):
+            events.append("stop")
+
+    sp = audio_alerts.AlertSpeaker.__new__(audio_alerts.AlertSpeaker)
+    sp.manifest = {"CẢNH BÁO: tập trung": Path("critical.wav")}
+    sp._thread = BusyThread()
+    sp._current_text = "CẢNH BÁO: tập trung"
+    sp._sd = FakeSD()
+    sp._play_lock = threading.Lock()
+
+    assert sp.play("CẢNH BÁO: tập trung") is False
+    assert events == []
 
 
 def test_pose_calibration_neutralizes_camera_angle():

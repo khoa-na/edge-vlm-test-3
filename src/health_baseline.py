@@ -29,7 +29,21 @@ Z_STRONG = 3.0          # hoặc 1 feature |z| > 3 lặp >= 2 phiên liên tiế
 MIN_DAYS = 3
 FULL_DAYS = 7
 RETENTION_DAYS = 14
-EPS = 1e-6
+
+# Độ nhiễu tối thiểu theo đơn vị của từng feature. Nếu 7 giá trị daily giống
+# hệt nhau, std thống kê bằng 0; dùng epsilon số học cực nhỏ sẽ biến một sai
+# khác không đáng kể thành hàng trăm sigma. Các floor này là guard thực dụng
+# cho prototype và cần calibration lại theo camera/sensor production.
+STD_FLOOR = {
+    "eye_darkness": 0.02,
+    "eye_openness": 0.01,
+    "eye_puffiness": 0.01,
+    "skin_paleness": 0.02,
+    "lip_color_index": 0.03,
+    "blink_rate": 2.0,
+    "perclos": 0.02,
+    "yawn_rate": 0.5,
+}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS health_samples (
@@ -175,7 +189,8 @@ class HealthBaseline:
             if base is None:
                 continue
             provisional = provisional or base["is_provisional"]
-            z = (value - base["mean_7d"]) / max(base["std_7d"], EPS)
+            scale = max(base["std_7d"], STD_FLOOR[feat])
+            z = (value - base["mean_7d"]) / scale
             if z * BAD_DIRECTION[feat] > Z_CONSENSUS:
                 consensus.append(feat)
                 deltas.append(f"{feat} lệch {abs(z):.1f} sigma theo hướng xấu")

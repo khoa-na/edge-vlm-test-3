@@ -1,7 +1,7 @@
 -r requirements.txt
 
 # Webcam/video thật: Tier 1 MediaPipe + YOLO và phát WAV offline.
-mediapipe
-opencv-python
-ultralytics
-sounddevice
+mediapipe==1.0.0
+opencv-python==5.0.0.93
+ultralytics==8.4.120
+sounddevice==0.5.5

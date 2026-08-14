@@ -72,12 +72,12 @@ Sau khi một loại sự kiện đã kích hoạt Tier 2, cooldown ngăn cùng 
 | # | Điều kiện phát hiện (Tier 1) | Loại | Hành động |
 |---|---|---|---|
 | T0 | EAR < 0.2 liên tục > 1.5s | KHẨN CẤP | Tier 1 phát cảnh báo âm thanh ngay; không gọi VLM. |
-| T1 | Pitch < −25° > 1.5s hoặc phone detected | KHẨN CẤP | Như T0: cảnh báo rule-based ngay. |
+| T1 | Pitch < −25° > 1.5s hoặc phone detected | KHẨN CẤP | Cảnh báo rule-based ngay; câu nói phân biệt phone với head-down để không khẳng định sai hành vi. |
 | T2 | PERCLOS > 25% trong 60s | Cảnh báo nhẹ + trigger VLM | Tier 1 phát ngay câu TTS duyệt sẵn ("Bạn có vẻ buồn ngủ, chú ý tập trung nhé"); VLM chạy sau để sinh lời khuyên ngữ cảnh đầy đủ hơn. |
 | T3 | ≥ 3 lần ngáp / 10 phút | Cảnh báo nhẹ + trigger VLM | Như T2 — nhắc nhẹ tức thời trước, VLM bổ sung sau. |
-| T4 | \|Yaw\| > 45° lặp > 3 lần / 30s | Cảnh báo nhẹ + trigger VLM | Tier 1 nhắc "chú ý quan sát phía trước" ngay; VLM chọn mức nhắc trong schema fatigue đóng. |
+| T4 | \|Yaw\| > 45° lặp ≥ 3 lần / 30s | Cảnh báo nhẹ + trigger VLM | Tier 1 nhắc "chú ý quan sát phía trước" ngay; VLM chọn mức nhắc trong schema fatigue đóng. |
 | T5 | `continuous_driving_min` > 60 (telematics, không cần CV) | Câu tĩnh + trigger VLM | Nhắc nghỉ bằng câu duyệt sẵn ngay; VLM chạy nền để bổ sung ngữ cảnh, không chặn frame loop. |
-| T6 | Định kỳ mỗi 5 phút | Scheduled (CV, không phải VLM) | Trích feature bằng landmark + thống kê màu, qua quality gate rồi ghi baseline. Sensor nhiệt/skip policy là hook production chưa triển khai. |
+| T6 | Định kỳ mỗi 5 phút | Scheduled (CV, không phải VLM) | Trích feature bằng landmark + thống kê màu; bỏ frame quá tối và feature temporal chưa đủ cửa sổ trước khi ghi baseline. Sensor nhiệt/skip policy là hook production chưa triển khai. |
 | T7 | Anomaly baseline (Khối 3): ≥ 2 feature cùng hướng xấu với \|z\| > 2, hoặc 1 feature \|z\| > 3 lặp ≥ 2 phiên liên tiếp | Câu tĩnh + trigger VLM | Ghi cờ ngày anomaly, nhắc nhẹ ngay và chạy VLM nền; ngưỡng nằm một chỗ trong `health_baseline.py`. |
 
 Ở T2–T4, người lái được nghe một câu TTS đã duyệt ngay khi sự kiện vượt qua debounce. VLM chạy sau để bổ sung ngữ cảnh, chứ không quyết định việc có cảnh báo hay không. Cách làm này giữ được phản hồi nhanh ngay cả khi model đang bận hoặc gặp lỗi.

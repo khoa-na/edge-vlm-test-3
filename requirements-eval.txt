@@ -1,4 +1,4 @@
 -r requirements-demo.txt
 
 # Tải và replay dataset FL3D.
-kagglehub
+kagglehub==1.0.2

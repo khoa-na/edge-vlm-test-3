@@ -63,7 +63,7 @@ def main():
     for cycle in range(3):
         t = run_scenario(monitor, backend, f"Ngáp lần {cycle + 1} (MAR cao 2.5s)",
                          dict(ear=0.30, mar=0.75), telem_normal, 2.5, t)
-        t = run_scenario(monitor, backend, f"  ... đóng miệng",
+        t = run_scenario(monitor, backend, "  ... đóng miệng",
                          dict(ear=0.30, mar=0.10), telem_normal, 1.0, t)
     # T5 dùng monitor mới: cửa sổ đếm ngáp 10 phút của kịch bản trên còn
     # active, sẽ che T5 nếu dùng chung state

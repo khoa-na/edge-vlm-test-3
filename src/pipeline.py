@@ -33,13 +33,16 @@ except ImportError:
 VLM_COOLDOWN_SEC = 180        # khóa trigger cùng loại 3 phút, tránh spam
 PERIODIC_VLM_INTERVAL_SEC = 300
 LONG_DRIVE_TRIGGER_MIN = 60
+MIN_HEALTH_LUMA = 35.0
 
 # Cảnh báo Tier 1 — tài sản tĩnh duyệt sẵn, không phải text model sinh,
 # nên không đi qua guardrail và không bị VLM làm chậm (mục tiêu <300ms;
 # cần đo end-to-end lại trên SoC đích)
 IMMEDIATE_ALERTS = {
     "T0_eyes_closed": "CẢNH BÁO: Báo động! Hãy tập trung lái xe!",
-    "T1_phone_or_head_down": "CẢNH BÁO: Vui lòng bỏ điện thoại xuống và nhìn đường!",
+    "T1_phone": "CẢNH BÁO: Vui lòng bỏ điện thoại xuống và nhìn đường!",
+    # Dùng lại WAV T0 để không khẳng định nhầm người lái đang cầm điện thoại.
+    "T1_head_down": "CẢNH BÁO: Báo động! Hãy tập trung lái xe!",
     "T2_perclos_fatigue": "Bạn có vẻ buồn ngủ, chú ý tập trung nhé.",
     "T3_frequent_yawning": "Bạn ngáp hơi nhiều rồi, tấp vào nghỉ vài phút nhé.",
     "T4_repeated_head_turns": "Chú ý quan sát phía trước nhé.",
@@ -261,7 +264,9 @@ class SafetyAndHealthMonitorPipeline:
         t1 = self.tier1_fast_stream_check(frame, now=now, telematics=telematics)
 
         # 2. Khẩn cấp T0/T1: phát ngay câu tĩnh duyệt sẵn, không đụng VLM
-        if t1["immediate_alert"] in ("T0_eyes_closed", "T1_phone_or_head_down"):
+        if t1["immediate_alert"] in (
+            "T0_eyes_closed", "T1_phone", "T1_head_down"
+        ):
             return IMMEDIATE_ALERTS[t1["immediate_alert"]]
 
         # 3. Kết quả VLM async từ frame trước (nếu có) — trả trước khi xét
@@ -335,12 +340,17 @@ class SafetyAndHealthMonitorPipeline:
         if (raw is None or not raw.face_found
                 or getattr(raw, "landmark_conf", 0.0) < 0.7):
             return None
+        luma = self._frame_luma(frame)
+        if luma < MIN_HEALTH_LUMA:
+            return None
         features = self._extract_health_features(frame, t1)
         # Không ghi một phiên quá ít thông tin: các số 0 mặc định từ temporal
         # state không được biến thành "trạng thái sức khỏe" khi ROI màu lỗi.
         if sum(value is not None for value in features.values()) < len(features) / 2:
             return None
-        light_bucket = telematics.get("light_bucket", 1)
+        light_bucket = telematics.get("light_bucket")
+        if light_bucket not in (0, 1, 2, 3):
+            light_bucket = self._light_bucket_from_luma(luma)
         self.baseline.add_sample(self.profile_id, int(time.time()),
                                  light_bucket, features)
         verdict = self.baseline.check_anomaly(self.profile_id, light_bucket, features)
@@ -359,6 +369,27 @@ class SafetyAndHealthMonitorPipeline:
                 return self.guardrails.fallbacks["fatigue"]
         return None
 
+    @staticmethod
+    def _frame_luma(frame: np.ndarray) -> float:
+        """Độ sáng trung bình xấp xỉ từ frame RGB, không cần OpenCV."""
+        if frame.ndim < 3 or frame.shape[-1] < 3:
+            return float(np.mean(frame))
+        rgb = frame[..., :3].astype(np.float32, copy=False)
+        return float(np.mean(
+            0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
+        ))
+
+    @staticmethod
+    def _light_bucket_from_luma(luma: float) -> int:
+        """Fallback khi chưa có lux sensor: ước lượng bucket từ ảnh."""
+        if luma < 60:
+            return 0
+        if luma < 120:
+            return 1
+        if luma < 190:
+            return 2
+        return 3
+
     def _extract_health_features(self, frame: np.ndarray,
                                  t1: Dict[str, Any]) -> Dict[str, Optional[float]]:
         """Trích feature sức khỏe từ landmark + thống kê màu Lab (không cần VLM).
@@ -370,8 +401,9 @@ class SafetyAndHealthMonitorPipeline:
         raw = t1.get("raw")
         return {
             "eye_openness": raw.ear if raw and raw.face_found else None,
-            "perclos": t1.get("perclos"),
-            "yawn_rate": float(t1.get("yawn_count_10min", 0)),
+            "perclos": (t1.get("perclos") if t1.get("perclos_valid") else None),
+            "yawn_rate": (float(t1.get("yawn_count_10min", 0))
+                          if t1.get("yawn_rate_valid") else None),
             "blink_rate": t1.get("blink_rate"),
             "eye_darkness": getattr(raw, "eye_darkness", None),
             "eye_puffiness": getattr(raw, "eye_puffiness", None),

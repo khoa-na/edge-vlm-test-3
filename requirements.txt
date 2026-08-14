@@ -1,6 +1,6 @@
 # Lõi — bắt buộc (demo + test chạy với mock backend)
-numpy
-pytest
+numpy==2.5.2
+pytest==9.1.1
 
 # Tùy chọn — chạy thật Tier 1 với webcam
 # mediapipe

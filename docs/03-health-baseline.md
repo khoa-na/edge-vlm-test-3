@@ -36,9 +36,9 @@ Pipeline dùng lại landmark từ Tier 1, lấy các vùng nhỏ quanh mắt, m
 | `yawn_rate` | Số lần ngáp/10 phút | Mệt mỏi |
 | `light_bucket` | Điều kiện sáng do camera, cảm biến hoặc telematics cung cấp, gom thành các dải tối / trong nhà / ngoài trời / nắng gắt | Biến kiểm soát — không phải feature sức khỏe |
 
-Ánh sáng là nguồn sai lệch lớn nhất của nhóm chỉ số màu: cùng một khuôn mặt có thể trông nhợt dưới đèn trắng nhưng hoàn toàn bình thường dưới nắng chiều. Vì vậy, các chỉ số màu được tính tương đối giữa hai vùng trên cùng khuôn mặt, như môi so với má hoặc hốc mắt so với má. Mỗi mẫu còn đi kèm `light_bucket`, và baseline chỉ so sánh các phiên có điều kiện sáng tương đương. Nếu ảnh quá tối để trích xuất đáng tin cậy, phiên đó bị bỏ thay vì cố ghi một giá trị nhiễu.
+Ánh sáng là nguồn sai lệch lớn nhất của nhóm chỉ số màu: cùng một khuôn mặt có thể trông nhợt dưới đèn trắng nhưng hoàn toàn bình thường dưới nắng chiều. Vì vậy, các chỉ số màu được tính tương đối giữa hai vùng trên cùng khuôn mặt, như môi so với má hoặc hốc mắt so với má. Mỗi mẫu còn đi kèm `light_bucket`; runner nhận bucket 0–3 từ sensor/CLI hoặc ước lượng từ độ sáng frame khi không có sensor. Baseline chỉ so sánh các phiên trong cùng bucket. Frame có luma trung bình dưới 35 bị bỏ thay vì cố ghi một giá trị nhiễu.
 
-Trước khi lưu, mẫu phải qua một quality gate: pipeline bỏ phiên nếu không thấy mặt, nếu `landmark_confidence < 0.7`, hoặc nếu chưa đến một nửa số feature có giá trị hợp lệ. Feature riêng lẻ trích không được sẽ để `NULL`. Phần nhận diện khẩu trang và kính râm chưa được nối vào nhánh health vì repo chưa có weights pre-ride thật; do đó prototype chưa thể đảm bảo mọi vùng bị che đều được loại chính xác.
+Trước khi lưu, mẫu phải qua một quality gate: MediaPipe được cấu hình detection/presence confidence 0,7; pipeline bỏ phiên nếu không thấy mặt, backend báo confidence thấp, frame quá tối hoặc chưa đến một nửa số feature có giá trị hợp lệ. PERCLOS chỉ được lưu sau khi có ít nhất 30 giây dữ liệu, blink rate sau khoảng 60 giây và yawn rate sau đủ cửa sổ 10 phút; trước đó các trường này là `NULL`. Phần nhận diện khẩu trang và kính râm chưa được nối vào nhánh health vì repo chưa có weights pre-ride thật; do đó prototype chưa thể đảm bảo mọi vùng bị che đều được loại chính xác.
 
 ## 4. Schema SQLite hiện thực
 
@@ -105,7 +105,7 @@ Mỗi feature có một hướng lệch cần chú ý, được định nghĩa t
 | `lip_color_index` | z âm (môi mất sắc đỏ = tím tái) |
 | `blink_rate`, `perclos`, `yawn_rate` | z dương (chớp/nhắm/ngáp nhiều hơn) |
 
-Cờ anomaly bật theo một trong hai cách. Cách thứ nhất là có ít nhất hai feature cùng lệch theo hướng cần chú ý với |z| > 2.0. Cách thứ hai là một feature lệch mạnh với |z| > 3.0 và lặp lại trong hai phiên liên tiếp. Nhánh thứ hai giúp không bỏ sót trường hợp chỉ một dấu hiệu thay đổi rõ, còn yêu cầu lặp lại giúp loại bớt nhiễu của một lần đo đơn lẻ.
+Cờ anomaly bật theo một trong hai cách. Cách thứ nhất là có ít nhất hai feature cùng lệch theo hướng cần chú ý với |z| > 2.0. Cách thứ hai là một feature lệch mạnh với |z| > 3.0 và lặp lại trong hai phiên liên tiếp. Khi độ lệch chuẩn lịch sử bằng hoặc gần 0, mẫu số dùng noise floor riêng cho từng feature thay vì epsilon số học; cách này tránh biến sai khác rất nhỏ thành hàng trăm sigma. Các noise floor hiện là guard cho prototype và cần hiệu chỉnh lại trên camera đích.
 
 Một số quy tắc giúp baseline không tự học nhầm dữ liệu bất thường:
 

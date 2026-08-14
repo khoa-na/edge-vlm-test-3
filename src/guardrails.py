@@ -129,7 +129,12 @@ class MedicalGuardrails:
                 self._audit("empty_output", trigger_reason)
                 return self._fallback(trigger_reason)
 
-            normalized = unicodedata.normalize("NFC", raw_text).lower()
+            # Thu gọn mọi dạng whitespace (nhiều space, tab, newline) trước
+            # khi so khớp. Nếu không, cụm cấm như "thiếu máu" có thể bị né
+            # đơn giản bằng "thiếu   máu".
+            normalized = re.sub(
+                r"\s+", " ", unicodedata.normalize("NFC", raw_text).lower()
+            ).strip()
             stripped = _strip_diacritics(normalized)
 
             for term, rx, rx_no_marks in self._banned:

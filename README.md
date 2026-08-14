@@ -15,9 +15,9 @@ Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3*
 
 Các kết quả có thể chạy lại từ repo:
 
-- **50 unit test** cho temporal trigger, guardrails, async latency, persistence, retention, audio priority, TTS manifest và regression.
+- **58 unit test** cho temporal trigger, guardrails, async latency, persistence, retention, audio priority, TTS manifest và regression.
 - **FL3D, 20.806 frame:** frame accuracy 89,8%; bắt 34/40 episode microsleep ≥1,5 giây, recall 85%.
-- **Red-team mặc định:** 42 case post-filter, 0 vượt rào, 0 false-positive. Khi có llama-server: thêm 23 case prompt injection qua VLM thật, tổng 65 case.
+- **Red-team mặc định:** 45 case post-filter, 0 vượt rào, 0 false-positive. Khi có llama-server: thêm 23 case prompt injection qua VLM thật, tổng 68 case.
 - **Demo người thật:** [demo_webcam.mp4](demo_webcam.mp4), 143 giây, 640×480 @ 10 FPS, có audio cảnh báo.
 
 ## Chạy nhanh
@@ -25,7 +25,7 @@ Các kết quả có thể chạy lại từ repo:
 Chỉ cần Python, không cần camera hay model:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest tests/ -q
 .venv/bin/python -m src.demo
@@ -54,6 +54,8 @@ Chạy Tier 1 thật trên webcam/video:
 Chạy Tier 2 thật qua llama-server:
 
 ```bash
+# yêu cầu binary llama-server của llama.cpp có trong PATH
+llama-server --version
 ./scripts/setup_models.sh vlm  # khoảng 2 GB, file GGUF được .gitignore
 llama-server -m models/qwen3.5-2b-q4_k_m.gguf \
   --mmproj models/qwen3.5-2b-mmproj-f16.gguf --port 8090 -c 4096 \
@@ -88,7 +90,7 @@ Camera 5–10 FPS ──► Tier 1: MediaPipe + YOLO + temporal rules
 
 Tier 1 chạy trên mọi frame. MediaPipe trích EAR/MAR và ước lượng pitch/yaw; YOLO26n FP32 `.pt` chạy mỗi ba frame rồi dùng lại confidence ở các frame xen giữa để giảm tải CPU. State machine theo thời gian dùng duration, debounce, cửa sổ trượt và cooldown để tránh kết luận từ một frame nhiễu.
 
-Mọi trigger VLM từ T2 đến T7 đều chạy nền. T0/T1 đi thẳng tới cảnh báo tĩnh; T5 lái lâu và T7 lệch baseline cũng có thể trả câu đã duyệt trước khi worker hoàn tất. Nếu loa đang phát một lời nhắc thường, T0/T1 có quyền ngắt để phát cảnh báo khẩn cấp.
+Mọi lần gọi VLM từ T2–T5 và T7 đều chạy nền; T6 chỉ trích feature bằng CV. T0/T1 đi thẳng tới cảnh báo tĩnh; T5 lái lâu và T7 lệch baseline cũng có thể trả câu đã duyệt trước khi worker hoàn tất. Nếu loa đang phát một lời nhắc thường, T0/T1 có quyền ngắt để phát cảnh báo khẩn cấp, nhưng cùng một cảnh báo đang đọc sẽ không tự khởi động lại ở mỗi frame.
 
 Tier 2 chỉ quyết định `observation` và `severity`. Code điền `context_slots` từ telematics rồi chọn câu tiếng Việt trong template bank; model không trực tiếp viết lời phát ra loa.
 
@@ -121,7 +123,7 @@ Phép đánh giá FL3D dùng tám sequence đầu theo thứ tự tên, không c
 
 ## Bộ nhớ trạng thái và quyền riêng tư
 
-Runner thật mặc định lưu dữ liệu vào `data/health_baseline.sqlite3`. Có thể chọn hồ sơ cục bộ bằng `--profile-id`, hoặc dùng `--db-path :memory:` nếu không muốn ghi khi replay. Mỗi phiên chỉ giữ tối đa tám chỉ số, không lưu ảnh hay face embedding. Dữ liệu được tổng hợp theo ngày; baseline lấy tối đa bảy ngày hợp lệ gần nhất và tự xóa dữ liệu quá 14 ngày.
+Runner thật mặc định lưu dữ liệu vào `data/health_baseline.sqlite3`. Có thể chọn hồ sơ cục bộ bằng `--profile-id`, hoặc dùng `--db-path :memory:` nếu không muốn ghi khi replay. Mỗi phiên chỉ giữ tối đa tám chỉ số, không lưu ảnh hay face embedding. Frame quá tối bị bỏ; `light_bucket` lấy từ sensor/CLI nếu có, nếu không sẽ được ước lượng từ độ sáng ảnh. Dữ liệu được tổng hợp theo ngày; baseline lấy tối đa bảy ngày hợp lệ gần nhất và tự xóa dữ liệu quá 14 ngày.
 
 Prototype đã có giảm thiểu dữ liệu, lưu bền vững, giới hạn thời gian lưu và loại ngày bất thường khỏi baseline. Mã hóa bằng SQLCipher/Keystore, màn hình xin consent và quyền xóa trong ứng dụng mới chỉ là yêu cầu cho bản production, chưa được triển khai trong repo Python này.
 
@@ -141,6 +143,7 @@ Head pose hiện là ước lượng pitch/yaw nhanh từ landmark 2D, có calib
 
 ```text
 docs/                         Thiết kế, guardrails, baseline, eval, giải trình
+THIRD_PARTY_NOTICES.md        Nguồn và giấy phép thành phần bên thứ ba
 src/pipeline.py               Cascade, trigger, async VLM, pre-ride
 src/tier1.py                  Landmark metrics + temporal state machine
 src/object_detector.py        YOLO phone + interface pre-ride
@@ -154,6 +157,7 @@ src/eval_fl3d.py              Eval dữ liệu thật
 src/red_team.py               Red-team hai lớp
 assets/tts/                   28 WAV duyệt sẵn + manifest
 scripts/setup_models.sh       Tải/check model có checksum
+.github/workflows/tests.yml   CI cho test, demo mock và red-team
 tests/test_pipeline.py        Unit và regression tests
 ```
 
@@ -164,3 +168,4 @@ tests/test_pipeline.py        Unit và regression tests
 - Các feature màu/sưng mắt của health baseline là heuristic prototype, chưa được đánh giá lâm sàng và tuyệt đối không dùng để chẩn đoán.
 - SQLite trong prototype chưa mã hóa at-rest.
 - GGUF, YOLO weights và voice model lớn không commit vào Git; script setup tải chúng từ nguồn công khai và kiểm checksum.
+- Nguồn và điều kiện giấy phép của model/voice được ghi trong `THIRD_PARTY_NOTICES.md`; mã nguồn bài làm chưa được cấp license riêng.
