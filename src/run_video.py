@@ -111,6 +111,9 @@ def main():
     audio_events = []  # (timestamp_sec, wav_path) cho --audio-mux
 
     for ts, frame, name in iter_frames(args.input, args.fps):
+        # driving_min cộng dồn theo thời gian clip — hành trình dài dần như
+        # thật, T5 (>60') nổ giữa clip thay vì ngay frame đầu khi khai 65'
+        telematics["continuous_driving_min"] = args.driving_min + ts / 60
         alert = monitor.process_stream_frame(frame, telematics, now=ts)
         n_frames += 1
         if alert and alert != last:
