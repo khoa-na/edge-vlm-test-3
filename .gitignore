@@ -9,3 +9,5 @@ venv/
 demo_output.mp4
 models/tts/
 WIN_*.mp4
+data/*.sqlite3
+data/*.sqlite3-*

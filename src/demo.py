@@ -25,7 +25,7 @@ def run_scenario(monitor, backend, name, metrics, telematics, seconds, t0):
         now = t0 + i / FPS
         out = monitor.process_stream_frame(FRAME, telematics, now=now)
         if out and (not alerts or alerts[-1] != out):
-            print(f"  [t={now:6.1f}s] 🔊 {out}")
+            print(f"  [t={now:6.1f}s] {out}")
             alerts.append(out)
     if not alerts:
         print("  (không có cảnh báo — đúng kỳ vọng)" if "bình thường" in name
@@ -52,6 +52,12 @@ def main():
                      dict(ear=0.10), telem_normal, 3, t)
     t = run_scenario(monitor, backend, "Nhìn điện thoại (T1 — khẩn cấp)",
                      dict(ear=0.30, phone_conf=0.9), telem_normal, 2, t)
+    # Cho hysteresis phone đủ 10 frame release trước khi sang kịch bản ngáp.
+    # Đây là khoảng chuyển cảnh, không in cảnh báo T1 còn sót sang nhãn mới.
+    backend.set_scenario(ear=0.30, phone_conf=0.0)
+    for i in range(FPS):
+        monitor.process_stream_frame(FRAME, telem_normal, now=t + i / FPS)
+    t += 1.0
     # 3 chu kỳ ngáp thật: MAR cao 2.5s rồi đóng miệng 1s (đếm ngáp là
     # edge-triggered — chỉ tính khi miệng đóng lại sau >=2s mở)
     for cycle in range(3):

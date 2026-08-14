@@ -32,8 +32,9 @@ def load_manifest(tts_dir: Optional[Path] = None) -> dict:
 class AlertSpeaker:
     """play(text) -> True nếu có audio và đã bắt đầu phát.
 
-    Câu đang phát thì câu mới cùng lúc bị bỏ (1 slot) — cảnh báo an toàn
-    không xếp hàng đọc dồn; trạng thái mới nhất luôn hiển thị trên overlay.
+    Câu thường đang phát thì câu thường mới bị bỏ (1 slot). Cảnh báo khẩn cấp
+    T0/T1 có prefix ``CẢNH BÁO:`` sẽ preempt câu thường để không bao giờ bị
+    nuốt chỉ vì loa đang bận.
     """
 
     def __init__(self, tts_dir: Optional[Path] = None):
@@ -41,6 +42,7 @@ class AlertSpeaker:
         import sounddevice  # ImportError -> caller quyết định tắt audio
         self._sd = sounddevice
         self._thread: Optional[threading.Thread] = None
+        self._play_lock = threading.Lock()
 
     def play(self, text: Optional[str]) -> bool:
         if not text:
@@ -48,17 +50,29 @@ class AlertSpeaker:
         path = self.manifest.get(text.strip())
         if path is None:
             return False
-        if self._thread is not None and self._thread.is_alive():
-            return False
 
-        def worker():
-            with wave.open(str(path), "rb") as wf:
-                rate = wf.getframerate()
-                data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-            self._sd.play(data, rate, blocking=True)
+        critical = text.strip().startswith("CẢNH BÁO:")
+        with self._play_lock:
+            if self._thread is not None and self._thread.is_alive():
+                if not critical:
+                    return False
+                # sounddevice.stop() giải phóng lệnh play(blocking=True) đang
+                # chạy trên worker cũ; chờ rất ngắn để tránh hai stream đè nhau.
+                try:
+                    self._sd.stop()
+                    self._thread.join(timeout=0.1)
+                except Exception:
+                    # Cảnh báo khẩn vẫn được thử phát bằng worker mới.
+                    pass
 
-        self._thread = threading.Thread(target=worker, daemon=True)
-        self._thread.start()
+            def worker():
+                with wave.open(str(path), "rb") as wf:
+                    rate = wf.getframerate()
+                    data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+                self._sd.play(data, rate, blocking=True)
+
+            self._thread = threading.Thread(target=worker, daemon=True)
+            self._thread.start()
         return True
 
     def wait(self) -> None:

@@ -6,6 +6,7 @@ Thoát: phím q.
 """
 
 import argparse
+import atexit
 import time
 
 try:
@@ -31,6 +32,10 @@ def main():
     ap.add_argument("--calibrate", type=float, default=5.0, metavar="SEC",
                     help="hiệu chỉnh tư thế trung tính theo N giây đầu "
                          "(ngồi bình thường nhìn thẳng); 0 = tắt")
+    ap.add_argument("--db-path", default="data/health_baseline.sqlite3",
+                    help="SQLite baseline persistent; dùng :memory: để tắt lưu")
+    ap.add_argument("--profile-id", type=int, default=1,
+                    help="ID hồ sơ cục bộ, không phải face embedding")
     args = ap.parse_args()
 
     speaker = try_create_speaker() if args.audio else None
@@ -39,7 +44,11 @@ def main():
 
     monitor = SafetyAndHealthMonitorPipeline(
         edge_vlm_path=args.vlm, vlm_server_url=args.vlm_url,
-        pose_calibration_sec=args.calibrate)
+        pose_calibration_sec=args.calibrate, db_path=args.db_path,
+        profile_id=args.profile_id)
+    # Aggregate daily + retention cả khi người dùng Ctrl-C hoặc runner lỗi.
+    # end_trip idempotent (INSERT OR REPLACE), nên atexit là fallback an toàn.
+    atexit.register(monitor.end_trip)
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         raise SystemExit("Không mở được camera")
@@ -63,7 +72,7 @@ def main():
             # production đang chạy nhanh chỉ phát audio; overlay ở đây
             # là công cụ dev để quan sát
             channel = delivery_channel(telematics)
-            print(f"🔊 [{channel}] {alert}")
+            print(f"[{channel}] {alert}")
             if speaker:
                 speaker.play(alert)
 

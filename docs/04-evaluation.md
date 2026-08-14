@@ -2,11 +2,11 @@
 
 ## 1. Dataset
 
-FL3D (Frame-Level Driver Drowsiness Detection), Kaggle
-`matjazmuc/frame-level-driver-drowsiness-detection-fl3d` — khoảng 600MB, 53,331
-frame từ video cabin thật (nguồn NITYMED), nhãn từng frame: `alert` /
-`microsleep` / `yawning`. Nhãn khớp trực tiếp với hai hành vi Tier 1 phải bắt:
-mắt nhắm kéo dài (T0) và ngáp (T3).
+Tôi dùng FL3D (Frame-Level Driver Drowsiness Detection) trên Kaggle,
+`matjazmuc/frame-level-driver-drowsiness-detection-fl3d`. Bộ dữ liệu có dung
+lượng khoảng 600 MB, gồm 53.331 frame từ video cabin NITYMED và có nhãn theo
+từng frame: `alert`, `microsleep`, `yawning`. Hai nhãn sau tương ứng trực tiếp
+với mắt nhắm kéo dài (T0) và ngáp (T3), nên phù hợp để kiểm tra nhánh Tier 1.
 
 Tải không cần token:
 
@@ -18,16 +18,17 @@ kagglehub.dataset_download("matjazmuc/frame-level-driver-drowsiness-detection-fl
 ## 2. Cách chạy
 
 ```bash
-# tải model landmark (1 lần, ~3.7MB)
-curl -sL -o models/face_landmarker.task --create-dirs \
-  https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+# cài dependency đánh giá và tải model landmark
+pip install -r requirements-eval.txt
+./scripts/setup_models.sh tier1
 
 .venv/bin/python -m src.eval_fl3d --limit-seq 8   # ~10 phút CPU
 ```
 
-Tier 1 chạy MediaPipe FaceLandmarker thật (478 landmark, XNNPACK CPU), không
-mock. Frame được replay theo thứ tự trong mỗi sequence với FPS giả định 25,
-đi qua đúng `Tier1Analyzer` của pipeline — cùng ngưỡng, cùng state machine.
+Phép đánh giá này dùng MediaPipe FaceLandmarker thật với 478 landmark và
+XNNPACK CPU, không dùng mock. Các frame được phát lại đúng thứ tự trong từng
+sequence ở FPS giả định là 25, sau đó đi qua chính `Tier1Analyzer` của
+pipeline với cùng ngưỡng và state machine như lúc chạy demo.
 
 ## 3. Kết quả (8 sequence đầu theo thứ tự tên — không chọn lọc, 20,806 frame)
 
@@ -41,46 +42,52 @@ Frame-level, đo chất lượng chỉ số EAR/MAR tức thời:
 
 Frame-level accuracy: 89.8%.
 
-Episode-level — đây mới là điều hệ thống thật sự phải làm, bắt *đoạn* ngủ gật
-chứ không phải từng frame:
+Ở mức episode, phép đo quan tâm hệ thống có bắt được cả *đoạn* ngủ gật hay
+không, thay vì yêu cầu mọi frame trong đoạn đều được phân loại đúng:
 
-- Episode recall 34/40 = **85%**: đoạn microsleep dài từ 1.5s trở lên có ít
-  nhất một lần cảnh báo T0 nổ trong đoạn.
+- Episode recall 34/40 = **85%**: trong 40 đoạn microsleep dài từ 1,5 giây,
+  34 đoạn có ít nhất một cảnh báo T0.
 - False T0: 110/16,881 frame alert (**0.65%**). Các frame báo giả tập trung
   thành vài cụm nheo mắt kéo dài bị đọc nhầm chứ không rải đều; production
   giảm tiếp được bằng per-user EAR calibration, vì ngưỡng 0.20 cố định không
   hợp mọi hình dạng mắt.
 
-## 4. Nhận xét và hiệu chỉnh rút ra từ số liệu thật
+`0.65%` ở đây là tỷ lệ frame mà state T0 đang bật, tương đương khoảng 586
+frame-state/giờ nếu ngoại suy thô ở 25 FPS; nó **không phải** 586 lần phát loa
+độc lập vì các frame nằm trong cụm và runner có dedupe/cooldown. Để công bố
+false-alert SLA cần đếm episode cảnh báo độc lập trên nhiều giờ lái tự nhiên,
+phép đo này chưa thay thế được.
 
-1. EAR tách lớp rất rõ: microsleep EAR quanh 0.05, alert quanh 0.22–0.27.
-   Ngưỡng 0.20 đạt 91% frame recall và 85% episode recall chỉ bằng chỉ số
-   hình học — đúng luận điểm "Tier 1 nhẹ đủ gánh phần an toàn".
-2. MAR thì phải hiệu chỉnh trên dữ liệu thật: ngưỡng lý thuyết 0.6 quá cao
-   với bộ landmark MediaPipe (ngáp thật đo được MAR ~0.5), hạ về 0.35 sau
-   khi đo. Bài học chung: mọi ngưỡng Tier 1 cần calibration trên
-   camera/dataset thực tế.
-3. Ngáp thường kèm nhắm mắt, nên xét EAR trước MAR làm đa số frame ngáp bị
-   gán nhầm thành microsleep; đổi thứ tự ưu tiên (MAR trước) đưa yawning lên
-   81%. Với DMS thì nhầm lẫn này lành tính — cả hai đều là tín hiệu mệt mỏi,
-   đều dẫn tới nhắc nghỉ — nhưng thứ tự đúng giúp đếm ngáp (T3) chính xác.
-4. 7% frame alert bị gán microsleep ở mức frame, nhưng chỉ 0.65% frame alert
-   gây báo giả T0 ở mức pipeline — debounce 1.5s lọc gần hết nheo mắt và
-   nhìn xuống tự nhiên. Đây chính là lý do temporal state machine bắt buộc
-   phải có.
-5. 6 đoạn microsleep bị sót (recall 85%) chủ yếu là người lái nhắm hờ, EAR
-   quanh 0.21, sát ngay trên ngưỡng. Hướng cải thiện: per-user EAR
-   calibration lúc bắt đầu chuyến — đo EAR mở mắt bình thường trong 30 giây
-   đầu rồi đặt ngưỡng tương đối 70% mức đó, thay vì ngưỡng tuyệt đối chung.
+## 4. Những điều rút ra từ số liệu
+
+1. EAR phân tách hai lớp khá rõ: microsleep tập trung quanh 0,05, còn alert
+   thường nằm trong khoảng 0,22–0,27. Với ngưỡng 0,20, Tier 1 đạt 91% recall
+   theo frame và 85% recall theo episode. Kết quả này cho thấy một nhánh CV
+   nhẹ đã có thể đảm nhiệm cảnh báo tức thời mà không phải chờ VLM.
+2. MAR cần được hiệu chỉnh theo đúng landmark và camera sử dụng. Ngưỡng 0,6
+   ban đầu quá cao vì các frame ngáp trong FL3D thường chỉ có MAR quanh 0,5;
+   sau khi đo, tôi hạ ngưỡng xuống 0,35. Đây cũng là lý do các ngưỡng Tier 1
+   cần được hiệu chuẩn lại trước khi chuyển sang phần cứng và camera khác.
+3. Khi ngáp, người lái thường nhắm mắt cùng lúc. Nếu xét EAR trước MAR, nhiều
+   frame ngáp bị gán thành microsleep; ưu tiên MAR trước đưa độ chính xác của
+   lớp yawning lên 81%. Sự nhầm lẫn này không làm mất hoàn toàn tín hiệu mệt
+   mỏi, nhưng ảnh hưởng đến bộ đếm ngáp T3 nên vẫn cần sửa.
+4. Có 7% frame alert bị phân loại tức thời thành microsleep, trong khi tỷ lệ
+   frame alert thực sự làm T0 bật chỉ còn 0,65%. Debounce 1,5 giây đã loại
+   phần lớn các lần nheo mắt hoặc nhìn xuống ngắn, cho thấy state machine theo
+   thời gian là một phần thiết yếu của hệ thống chứ không chỉ là lớp phụ.
+5. Sáu episode bị bỏ sót chủ yếu là trường hợp người lái nhắm hờ với EAR
+   quanh 0,21, ngay phía trên ngưỡng. Một hướng cải thiện hợp lý là đo EAR khi
+   mắt mở trong 30 giây đầu chuyến đi, rồi đặt ngưỡng cho từng người ở khoảng
+   70% mức đó thay vì dùng một giá trị tuyệt đối cho tất cả.
 
 ## 5. Tier 2 VLM thật — Qwen3.5-2B qua llama-server
 
-Tier 2 đã chạy model thật: Qwen3.5-2B-Instruct Q4_K_M (1.28GB) cộng mmproj
-F16 (0.67GB), phục vụ qua llama-server — llama.cpp gốc, API OpenAI-compatible.
-Chọn llama-server thay vì binding `llama-cpp-python` vì binding trễ hỗ trợ
-model mới (issue Qwen3.5 lúc làm bài vẫn mở), còn llama.cpp gốc hỗ trợ day-1.
-Đây cũng là cách deploy edge thực tế: server process riêng, pipeline gọi
-HTTP localhost.
+Tier 2 đã được thử với model thật Qwen3.5-2B-Instruct Q4_K_M (1,28 GB) và
+mmproj F16 (0,67 GB), phục vụ qua `llama-server` bằng API tương thích OpenAI.
+Tôi chọn chạy server thành một process riêng để pipeline chỉ cần gọi HTTP
+trên localhost; cách tách này cũng giúp lỗi hoặc độ trễ của VLM không giữ
+vòng xử lý camera.
 
 ```bash
 llama-server -m models/qwen3.5-2b-q4_k_m.gguf \
@@ -96,57 +103,61 @@ Kết quả trên frame FL3D thật (CPU, 8 thread):
 | Frame microsleep + delta baseline + lái 125' trời 35°C | `eyes_heavy \| recommend_rest_now` | "Bạn lái đã lâu dưới trời nóng và mắt có vẻ mỏi, tấp vào chỗ mát nghỉ vài phút cho tỉnh táo nhé." (audio_short) | ~4–7s |
 | Frame alert, không delta | `looks_normal \| none` | (không nhắc — đúng) | ~4s |
 
-Schema enum được ép server-side (`response_format: json_schema`, thành grammar
-tại decoder) — model không thể trả free text, đúng thiết kế docs/02.
+Đầu ra được ràng buộc ở phía server bằng `response_format: json_schema`, sau
+đó chuyển thành grammar tại decoder. Vì vậy model chỉ chọn các giá trị enum,
+không trực tiếp viết câu sẽ phát cho người lái như mô tả trong docs/02.
 
-Cắm model thật xong rút được ba bài học, đều đã sửa trong code:
+Việc chạy model thật làm lộ ra ba vấn đề không xuất hiện với mock; cả ba đã
+được xử lý trong code:
 
-1. Model hybrid reasoning đốt sạch token vào thinking, content trả về rỗng.
-   Phải tắt bằng `--chat-template-kwargs '{"enable_thinking": false}'`.
-2. Câu prompt "unsure thì chọn looks_normal" nghe an toàn, nhưng làm model
-   2B chọn normal cho cả frame đang nhắm mắt — bias an toàn quá đà giết
-   utility. Thay bằng decision rule 4 bước có thứ tự; phần an toàn y tế đã
-   do schema và template bank gánh, không cần model tự kiềm chế thêm.
-3. `context_slots` là fact lấy từ telematics (speed suy ra moving/stopped),
-   nên để code điền tất định sau khi model trả. Model chỉ quyết observation
-   và severity — phần thật sự cần nhìn ảnh. Trước khi sửa, model từng đoán
-   "stopped" khi speed đang 52.
+1. Chế độ reasoning dùng hết ngân sách token cho phần thinking và đôi khi để
+   `content` rỗng. Khi chạy server cần tắt chế độ này bằng
+   `--chat-template-kwargs '{"enable_thinking": false}'`.
+2. Chỉ dẫn "nếu không chắc thì chọn `looks_normal`" khiến model 2B chọn bình
+   thường ngay cả khi frame cho thấy mắt đang nhắm. Tôi thay nó bằng quy tắc
+   quyết định bốn bước có thứ tự. An toàn y tế vẫn do schema đóng và template
+   bank đảm nhiệm, nên không cần đẩy trách nhiệm đó sang model.
+3. `context_slots` là dữ kiện lấy từ telematics, ví dụ tốc độ quyết định xe
+   đang chạy hay dừng. Code hiện điền các trường này sau khi model trả về;
+   VLM chỉ chọn `observation` và `severity`, là hai phần thực sự cần nhìn ảnh.
+   Trước thay đổi này, model từng trả `stopped` dù tốc độ đầu vào là 52 km/h.
 
-Latency 4–7s mỗi call trên CPU nằm trong ngân sách Tier 2 (1–5s, không trên
-safety path); NPU/GPU edge thực tế sẽ nhanh hơn đáng kể.
+Độ trễ đo được trên CPU là khoảng 4–7 giây cho mỗi lần gọi. T2–T7 hiện chạy
+trên worker nền; T0/T1 không gọi VLM, còn các trigger thường có thể dùng câu
+tĩnh đã duyệt trước. Do đó độ trễ trên không chặn vòng đọc camera. NPU hoặc
+GPU có thể cải thiện tốc độ, nhưng repo này chưa có benchmark để khẳng định
+mức cải thiện.
 
 ## 6. Giới hạn của đánh giá (khai báo minh bạch)
 
-- Ngưỡng MAR hiệu chỉnh trên chính dataset này (in-sample calibration), nên
-  số yawning phải đọc là "khả năng của chỉ số sau calibration" chứ không
-  phải kết quả out-of-sample. EAR 0.20 là ngưỡng văn liệu chuẩn, không
-  tinh chỉnh.
+- Ngưỡng MAR được hiệu chỉnh trên chính FL3D, nên kết quả yawning phản ánh
+  hiệu năng sau in-sample calibration, chưa phải đánh giá out-of-sample.
+  Ngưỡng EAR 0,20 không được tinh chỉnh theo bộ dữ liệu này.
 - Chạy 8 sequence đầu theo thứ tự tên — không chọn lọc theo nhãn (bản đánh
   giá đầu từng chọn ưu tiên sequence nhiều sự kiện, đã bỏ) — nhưng vẫn chưa
   phải toàn bộ dataset. Chạy full bằng `--limit-seq 0`, mất ~40 phút CPU.
 - FPS nguồn giả định 25 (NITYMED); sai số FPS ảnh hưởng định nghĩa đoạn
   ≥ 1.5s ở mức ±1 frame.
 
-## 7. Bổ sung sau demo webcam thật (gate EAR theo yaw)
+## 7. Bổ sung sau khi thử bằng webcam
 
-Chạy pipeline trên clip webcam người thật lộ ra một lớp lỗi mà FL3D không
-có: khi tài xế quay đầu (yaw 45–94°), landmark mắt bị "dẹt" theo phối cảnh
-— mắt đang mở mà đo như nhắm, PERCLOS vọt oan, cảnh báo buồn ngủ lặp hàng
-chục lần. Sửa hai tầng:
+Clip webcam người thật cho thấy một lỗi mà FL3D không bộc lộ. Khi người lái
+quay đầu với yaw khoảng 45–94°, landmark mắt bị dẹt theo phối cảnh; mắt vẫn
+mở nhưng EAR giảm như đang nhắm, kéo PERCLOS tăng sai và làm lời nhắc buồn
+ngủ lặp lại. Tôi xử lý ở hai chỗ:
 
-1. Gate EAR/MAR theo yaw (`EAR_VALID_YAW_DEG = 45°`): frame quay đầu quá
-   ngưỡng coi là không có dữ liệu mắt/miệng, không đếm vào
-   closed/PERCLOS/blink/yawn (đường đếm quay đầu T4 vẫn chạy riêng). Con số
-   45° chọn sau khi đo cả hai phía: 35° cắt oan 2 episode ngủ gật FL3D —
-   người gục đầu thường nghiêng cả đầu, recall tụt 85% → 80%; còn 45° giữ
-   nguyên recall 85% mà false T0 vẫn giảm nhẹ (0.67% → 0.65%). Số ở mục 3
-   là số sau gate.
-2. Cooldown cho câu nhắc tĩnh T2–T4: PERCLOS hay ngáp là trạng thái kéo dài
-   nhiều phút chứ không phải sự kiện điểm — trước đó câu nhắc trả về mỗi
-   frame (spam ~20 lần/phút), giờ mỗi loại chỉ phát một lần mỗi cooldown
-   180s, giống VLM.
+1. Gate EAR/MAR theo yaw (`EAR_VALID_YAW_DEG = 45°`). Frame vượt ngưỡng được
+   coi là thiếu dữ liệu mắt và miệng, nên không đi vào các bộ đếm
+   closed/PERCLOS/blink/yawn; đường đếm quay đầu T4 vẫn chạy độc lập. Thử
+   ngưỡng 35° làm mất hai episode FL3D và kéo recall từ 85% xuống 80%, còn
+   45° giữ recall ở 85% đồng thời giảm false T0 từ 0,67% xuống 0,65%. Các số
+   ở mục 3 là kết quả sau khi thêm gate này.
+2. Thêm cooldown 180 giây cho lời nhắc tĩnh T2–T4. PERCLOS cao hoặc ngáp
+   nhiều thường kéo dài qua nhiều frame, nên trước đó cùng một câu có thể
+   được trả về khoảng 20 lần mỗi phút. Hiện mỗi loại chỉ phát một lần trong
+   một khoảng cooldown, tương tự nhánh VLM.
 
-Bài học đáng ghi: eval trên dataset chính diện (FL3D quay người lái đang
-nhìn đường) không bao giờ phát hiện được lỗi phối cảnh — phải chạy trên
-chuyển động đầu thật mới lộ. Vì thế demo người thật nằm trong quy trình
-kiểm chứng, không phải chỉ để trình diễn.
+FL3D chủ yếu ghi người lái ở góc chính diện nên khó làm lộ lỗi phối cảnh khi
+quay đầu. Vì vậy, clip tự quay không chỉ phục vụ trình diễn mà còn bổ sung
+một góc kiểm thử khác với dataset và đã trực tiếp dẫn tới thay đổi trong
+pipeline.

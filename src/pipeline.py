@@ -35,13 +35,17 @@ PERIODIC_VLM_INTERVAL_SEC = 300
 LONG_DRIVE_TRIGGER_MIN = 60
 
 # Cảnh báo Tier 1 — tài sản tĩnh duyệt sẵn, không phải text model sinh,
-# nên không đi qua guardrail và không bị VLM làm chậm (SLA < 300ms)
+# nên không đi qua guardrail và không bị VLM làm chậm (mục tiêu <300ms;
+# cần đo end-to-end lại trên SoC đích)
 IMMEDIATE_ALERTS = {
     "T0_eyes_closed": "CẢNH BÁO: Báo động! Hãy tập trung lái xe!",
     "T1_phone_or_head_down": "CẢNH BÁO: Vui lòng bỏ điện thoại xuống và nhìn đường!",
     "T2_perclos_fatigue": "Bạn có vẻ buồn ngủ, chú ý tập trung nhé.",
     "T3_frequent_yawning": "Bạn ngáp hơi nhiều rồi, tấp vào nghỉ vài phút nhé.",
     "T4_repeated_head_turns": "Chú ý quan sát phía trước nhé.",
+    # T5 không khẩn cấp, nhưng vẫn trả một câu tĩnh ngay để người lái không
+    # phải chờ VLM 4-7 giây. VLM chỉ bổ sung ngữ cảnh ở frame sau.
+    "T5_long_driving": "Bạn đã lái xe khá lâu rồi, dừng chân thư giãn một chút cho tỉnh táo nhé.",
 }
 
 # Pre-ride: câu nhắc tĩnh duyệt sẵn (không phải text model sinh)
@@ -54,8 +58,8 @@ PRE_RIDE_CONF = 0.6
 
 
 class MockObjectDetector:
-    """Detector giả cho pre-ride check (helmet/mask/kính). Production: YOLO26n INT8
-    cùng model với phone detection, bật đủ class khi xe chưa lăn bánh.
+    """Detector giả cho pre-ride check (helmet/mask/kính). Production có thể
+    dùng weights custom export theo phần cứng đích khi xe chưa lăn bánh.
     Trả dict class -> confidence "đang đeo/đã cài".
     """
 
@@ -218,10 +222,15 @@ class SafetyAndHealthMonitorPipeline:
 
     def _start_async_vlm(self, frame: np.ndarray, reason: str,
                          telematics: Dict[str, Any], delta_text: str = "",
-                         max_severity: Optional[str] = None) -> None:
-        """1 slot: job đang chạy thì bỏ trigger mới (không xếp hàng dài)."""
+                         max_severity: Optional[str] = None) -> bool:
+        """Khởi chạy một job Tier 2 nền.
+
+        Chỉ có một slot để tránh hàng đợi inference dài trên edge. Trả True
+        khi job được nhận, False nếu một job khác đang chạy. Không nhánh gọi
+        VLM nào được phép chặn vòng đọc frame.
+        """
         if self._vlm_thread is not None and self._vlm_thread.is_alive():
-            return
+            return False
 
         frame_copy = frame.copy()
         telem_copy = dict(telematics)
@@ -234,6 +243,7 @@ class SafetyAndHealthMonitorPipeline:
 
         self._vlm_thread = threading.Thread(target=worker, daemon=True)
         self._vlm_thread.start()
+        return True
 
     def _pop_vlm_result(self) -> Optional[str]:
         with self._vlm_lock:
@@ -271,12 +281,13 @@ class SafetyAndHealthMonitorPipeline:
                     self._start_async_vlm(frame, reason, telematics)
                     return IMMEDIATE_ALERTS.get(reason)
 
-        # 5. T5: lái liên tục > 60 phút (telematics thuần; không khẩn cấp nên
-        # gọi đồng bộ được, nhưng vẫn không nằm trên safety path)
+        # 5. T5: lái liên tục > 60 phút. Trả câu tĩnh ngay và chạy VLM nền;
+        # dù trigger không khẩn cấp, gọi đồng bộ ở đây vẫn làm mù Tier 1 trong
+        # vài giây vì process_stream_frame nằm trên chính vòng đọc camera.
         if telematics.get("continuous_driving_min", 0) > LONG_DRIVE_TRIGGER_MIN:
             if self._cooldown_ok("T5_long_driving", now):
-                return self.tier2_run_vlm_context_analysis(
-                    frame, "T5_long_driving", telematics)
+                self._start_async_vlm(frame, "T5_long_driving", telematics)
+                return IMMEDIATE_ALERTS["T5_long_driving"]
 
         # 6. T6/T7: định kỳ 5 phút — trích feature bằng CV, so baseline (Khối 3)
         if now - self._last_periodic_ts >= PERIODIC_VLM_INTERVAL_SEC:
@@ -320,17 +331,32 @@ class SafetyAndHealthMonitorPipeline:
     def _periodic_health_check(self, frame: np.ndarray, t1: Dict[str, Any],
                                telematics: Dict[str, Any],
                                now: float) -> Optional[str]:
+        raw = t1.get("raw")
+        if (raw is None or not raw.face_found
+                or getattr(raw, "landmark_conf", 0.0) < 0.7):
+            return None
         features = self._extract_health_features(frame, t1)
+        # Không ghi một phiên quá ít thông tin: các số 0 mặc định từ temporal
+        # state không được biến thành "trạng thái sức khỏe" khi ROI màu lỗi.
+        if sum(value is not None for value in features.values()) < len(features) / 2:
+            return None
         light_bucket = telematics.get("light_bucket", 1)
         self.baseline.add_sample(self.profile_id, int(time.time()),
                                  light_bucket, features)
         verdict = self.baseline.check_anomaly(self.profile_id, light_bucket, features)
         if verdict["is_anomaly"] and self._cooldown_ok("T7_baseline_anomaly", now):
+            anomaly_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            self.baseline.mark_day_anomalous(self.profile_id, anomaly_day)
             # Baseline provisional (< 7 ngày dữ liệu): chỉ cho nhắc mức nhẹ nhất
             cap = "gentle" if verdict["is_provisional"] else None
-            return self.tier2_run_vlm_context_analysis(
+            started = self._start_async_vlm(
                 frame, "T7_baseline_anomaly", telematics,
                 delta_text=verdict["delta_text"], max_severity=cap)
+            # Một quan sát baseline không phải cảnh báo khẩn cấp. Nếu worker
+            # nhận job, nhắc nhẹ bằng câu đã duyệt ngay; kết quả có ngữ cảnh
+            # của VLM sẽ nổi lên ở frame sau. Nếu slot đang bận thì im lặng.
+            if started:
+                return self.guardrails.fallbacks["fatigue"]
         return None
 
     def _extract_health_features(self, frame: np.ndarray,
