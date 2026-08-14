@@ -436,3 +436,32 @@ def test_speaker_rejects_free_text():
     assert sp.play("text model tự bịa ra") is False
     assert sp.play(None) is False
     assert sp.play("") is False
+
+
+def test_pose_calibration_neutralizes_camera_angle():
+    """Camera lệch -14° (webcam thấp/cao hơn tầm mắt): sau calibration,
+    ngồi bình thường không nổ head-down; cúi thêm thật (-40 raw) vẫn nổ."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend, pose_calibration_sec=5.0)
+    # 6s đầu ngồi bình thường với camera lệch — gom mẫu + chốt offset
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-14.0), seconds=6.0)
+    assert analyzer.pose_calibrated
+    assert out["head_tilted_down"] is False
+    assert abs(out["raw"].pitch_deg) < 1.0     # -14 raw đã về ~0
+    # Giữ nguyên tư thế lệch thêm 8s nữa — vẫn không báo oan
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-14.0), seconds=8.0,
+                      t0=6.0)
+    assert out["head_tilted_down"] is False
+    # Cúi thật: -40 raw = -26 sau hiệu chỉnh, vượt ngưỡng -25
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-40.0), seconds=2.0,
+                      t0=14.0)
+    assert out["head_tilted_down"] is True
+
+
+def test_pose_calibration_disabled_by_default():
+    """pose_calibration_sec=0 (mặc định): đo thô như cũ, eval FL3D không đổi."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend)
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-30.0), seconds=2.0)
+    assert out["head_tilted_down"] is True
+    assert out["raw"].pitch_deg == -30.0

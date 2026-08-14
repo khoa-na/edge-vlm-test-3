@@ -8,7 +8,7 @@ metric thô; Tier1Analyzer lo phần temporal state machine (debounce, PERCLOS,
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -192,8 +192,19 @@ class Tier1Analyzer:
 
     backend: Any = field(default_factory=MockLandmarkBackend)
     phone_detector: Optional[Any] = None
+    # Hiệu chỉnh tư thế trung tính theo từng người/lần gắn camera: gom
+    # pitch/yaw trong N giây đầu có mặt (người ngồi bình thường), lấy median
+    # làm gốc 0 rồi trừ khỏi mọi phép đo sau đó. 0 = tắt. Camera lệch tầm
+    # mắt ±15° là chuyện thường (webcam laptop, dashboard mount) — không
+    # hiệu chỉnh thì ngưỡng cúi đầu -25° bị ăn mòn gần hết margin.
+    pose_calibration_sec: float = 0.0
 
     def __post_init__(self):
+        self._calib_start: Optional[float] = None
+        self._calib_samples: list = []
+        self._pitch_offset = 0.0
+        self._yaw_offset = 0.0
+        self.pose_calibrated = self.pose_calibration_sec <= 0
         self._eyes_closed_since: Optional[float] = None
         self._pitch_down_since: Optional[float] = None
         self._yawn_started: Optional[float] = None
@@ -238,6 +249,25 @@ class Tier1Analyzer:
             self._pitch_down_since = None
             self._yawn_started = None
         self._last_face_ts = now
+
+        # --- Calibration tư thế trung tính (N giây đầu có mặt) ---
+        if not self.pose_calibrated:
+            self._calib_start = self._calib_start or now
+            self._calib_samples.append((m.pitch_deg, m.yaw_deg))
+            if now - self._calib_start >= self.pose_calibration_sec:
+                self._pitch_offset = float(
+                    np.median([p for p, _ in self._calib_samples]))
+                self._yaw_offset = float(
+                    np.median([y for _, y in self._calib_samples]))
+                self._calib_samples.clear()
+                self.pose_calibrated = True
+        # Bản sao đã trừ offset: threshold, overlay, health feature cùng nhìn
+        # một hệ quy chiếu (đang calibration thì offset còn 0). Không mutate
+        # in-place — backend có thể dùng lại cùng object giữa các frame
+        if self._pitch_offset or self._yaw_offset:
+            m = replace(m, pitch_deg=m.pitch_deg - self._pitch_offset,
+                        yaw_deg=m.yaw_deg - self._yaw_offset)
+            result["raw"] = m
 
         # --- Mắt nhắm liên tục + PERCLOS + blink rate ---
         closed = m.ear < EAR_CLOSED_THRESHOLD

@@ -82,13 +82,15 @@ class SafetyAndHealthMonitorPipeline:
     def __init__(self, edge_vlm_path: str, device: str = "cuda",
                  profile_id: int = 1, db_path: str = ":memory:",
                  tier1_backend=None, object_detector=None, vlm_mmproj=None,
-                 vlm_server_url: Optional[str] = None, phone_detector=None):
+                 vlm_server_url: Optional[str] = None, phone_detector=None,
+                 pose_calibration_sec: float = 0.0):
         self.device = device
         self.profile_id = profile_id
         self.baseline = HealthBaseline(db_path)
         self.guardrails = MedicalGuardrails()
         self.object_detector = object_detector or MockObjectDetector()
         self.vlm_server_url = vlm_server_url
+        self.pose_calibration_sec = pose_calibration_sec
         self.init_cascade_models(edge_vlm_path, tier1_backend, vlm_mmproj,
                                  phone_detector)
         self._last_vlm_ts: Dict[str, float] = {}
@@ -123,8 +125,9 @@ class SafetyAndHealthMonitorPipeline:
             phone_detector = try_create_phone_detector()
             print("Tier 1: YOLO26n phone detector (real)" if phone_detector
                   else "Tier 1: phone via backend conf (YOLO26n unavailable)")
-        self.tier1 = Tier1Analyzer(backend=tier1_backend,
-                                   phone_detector=phone_detector)
+        self.tier1 = Tier1Analyzer(
+            backend=tier1_backend, phone_detector=phone_detector,
+            pose_calibration_sec=self.pose_calibration_sec)
 
         # Thứ tự ưu tiên Tier 2: llama-server (model mới day-1) ->
         # llama-cpp-python (embedded) -> mock

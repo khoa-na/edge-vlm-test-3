@@ -28,14 +28,18 @@ def main():
     ap.add_argument("--audio", action="store_true",
                     help="phát cảnh báo TTS tiếng Việt (cần assets/tts/, "
                          "chạy src.tts_prerender trước)")
+    ap.add_argument("--calibrate", type=float, default=5.0, metavar="SEC",
+                    help="hiệu chỉnh tư thế trung tính theo N giây đầu "
+                         "(ngồi bình thường nhìn thẳng); 0 = tắt")
     args = ap.parse_args()
 
     speaker = try_create_speaker() if args.audio else None
     if args.audio and speaker is None:
         print("Audio không khả dụng (thiếu assets/tts hoặc sounddevice) — chạy tiếp không tiếng")
 
-    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
-                                             vlm_server_url=args.vlm_url)
+    monitor = SafetyAndHealthMonitorPipeline(
+        edge_vlm_path=args.vlm, vlm_server_url=args.vlm_url,
+        pose_calibration_sec=args.calibrate)
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         raise SystemExit("Không mở được camera")

@@ -79,6 +79,9 @@ def main():
                     help="phát cảnh báo TTS tiếng Việt khi chạy (cần assets/tts/)")
     ap.add_argument("--audio-mux", action="store_true",
                     help="ghi giọng cảnh báo TTS vào video --output (cần ffmpeg)")
+    ap.add_argument("--calibrate", type=float, default=5.0, metavar="SEC",
+                    help="hiệu chỉnh tư thế trung tính theo N giây đầu clip "
+                         "(người ngồi bình thường); 0 = tắt")
     args = ap.parse_args()
     if args.audio_mux and not args.output:
         ap.error("--audio-mux cần --output")
@@ -90,8 +93,9 @@ def main():
         print("Audio không khả dụng (thiếu assets/tts hoặc sounddevice) — chạy tiếp không tiếng")
     tts_manifest = load_manifest() if args.audio_mux else {}
 
-    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
-                                             vlm_server_url=args.vlm_url)
+    monitor = SafetyAndHealthMonitorPipeline(
+        edge_vlm_path=args.vlm, vlm_server_url=args.vlm_url,
+        pose_calibration_sec=args.calibrate)
     telematics = {"continuous_driving_min": args.driving_min, "speed_kmh": 45,
                   "ambient_temp_c": 30, "weather": "normal"}
 
