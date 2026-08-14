@@ -4,22 +4,22 @@ Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3*
 
 ## Dành cho người chấm
 
-Bài làm được chia rõ thành hai phạm vi. Phần bắt buộc bám theo [đề bài gốc](<assets/BÀI KIỂM TRA NĂNG LỰC EDGE VLM & MULTIMODAL AI - SỐ 3.md>) và có thể chạy hoàn toàn bằng mock, không cần tải model. Phần làm thêm thay mock bằng MediaPipe, YOLO26n và Qwen3.5-2B để kiểm tra kiến trúc trên dữ liệu thật; đây không phải điều kiện để chạy bộ test bắt buộc.
+Repo được trình bày thành hai phần để tiện đối chiếu. Phần bắt buộc bám sát [đề bài gốc](<assets/BÀI KIỂM TRA NĂNG LỰC EDGE VLM & MULTIMODAL AI - SỐ 3.md>) và chạy hoàn toàn bằng mock, không cần tải model. Phần làm thêm đưa MediaPipe, YOLO26n và Qwen3.5-2B vào cùng pipeline để thử kiến trúc trên dữ liệu thật. Hai phần độc lập với nhau, vì vậy vẫn có thể chấm đầy đủ yêu cầu chính ngay cả khi máy không đủ tài nguyên để chạy model.
 
-Nếu chỉ có khoảng 5–10 phút để xem repo, có thể kiểm tra theo thứ tự sau:
+Nếu chỉ có 5–10 phút, cách nhanh nhất để xem bài là:
 
-1. Chạy `./scripts/smoke_test.sh` để kiểm tra unit test, demo mock và red-team mặc định.
-2. Chạy `.venv/bin/python -m src.demo` để xem đủ các kịch bản của đề mà không cần model.
-3. Xem [demo_webcam.mp4](demo_webcam.mp4), đặc biệt các mốc được liệt kê ở mục [Demo webcam — mốc xem nhanh](#demo-webcam--mốc-xem-nhanh).
-4. Đọc [giải trình kiến trúc](docs/05-giai-trinh.md) và [kết quả đánh giá](docs/04-evaluation.md) để xem cách đo, giả định và giới hạn của số liệu.
+1. Chạy `./scripts/smoke_test.sh` để kiểm tra unit test, demo mock và bộ red-team mặc định.
+2. Chạy `.venv/bin/python -m src.demo` nếu muốn xem riêng toàn bộ kịch bản trong đề mà không cần model.
+3. Xem [demo_webcam.mp4](demo_webcam.mp4) theo các mốc ở phần [Demo webcam — mốc xem nhanh](#demo-webcam--mốc-xem-nhanh) để kiểm tra bản chạy với người thật.
+4. Đọc [phần giải trình](docs/05-giai-trinh.md) và [báo cáo đánh giá](docs/04-evaluation.md) để xem rõ cách đo, các giả định và giới hạn của kết quả.
 
-Một số điểm quan trọng để đọc đúng phạm vi bài làm:
+Để tránh hiểu kết quả rộng hơn những gì đã được kiểm chứng:
 
-- Tier 1 phát hiện sự kiện bằng CV và luật theo thời gian. Cảnh báo khẩn cấp không chờ VLM.
-- Tier 2 VLM chỉ tổng hợp ngữ cảnh thành `observation` và `severity`; câu nói cuối cùng được chọn từ template đã duyệt và đi qua guardrail tất định.
-- FL3D được dùng để đánh giá buồn ngủ. Phone detection mới được minh họa trên video tự quay, chưa có bộ cabin-phone có nhãn đủ lớn để đưa ra claim tổng quát.
-- Health baseline là prototype bảo vệ quyền riêng tư, không phải chức năng chẩn đoán y tế.
-- Pre-ride đã có interface và mock theo đề, nhưng weights thật cho quai mũ, khẩu trang và kính chưa được train trong repo.
+- Tier 1 dùng CV và luật theo thời gian để phát hiện sự kiện; các cảnh báo khẩn cấp được phát ngay, không phải đợi VLM.
+- VLM ở Tier 2 không tự viết câu cảnh báo. Model chỉ trả về `observation` và `severity`; code sau đó chọn câu từ template đã duyệt và kiểm tra lại bằng guardrail tất định.
+- Kết quả FL3D chỉ phản ánh bài toán buồn ngủ. Phone detection đã chạy trên video tự quay, nhưng repo chưa có một bộ cabin-phone đủ lớn và có nhãn để đánh giá khả năng tổng quát hóa.
+- Health baseline mới dừng ở mức prototype ưu tiên giảm thiểu dữ liệu, hoàn toàn không nhằm chẩn đoán y tế.
+- Phần pre-ride đã có interface và kịch bản mock theo đề. Muốn dùng ngoài thực tế vẫn cần train weights riêng cho quai mũ, khẩu trang và kính.
 
 ## Tóm tắt bài làm
 
