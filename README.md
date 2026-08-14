@@ -2,7 +2,7 @@
 
 Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3**: Real-time Driver Safety, Health Trend Detection & Ethical AI Guardrails.
 
-🎬 **Demo người thật**: [`demo_webcam.mp4`](demo_webcam.mp4) — clip webcam 2.5 phút diễn đủ 6 kịch bản (nhắm mắt, ngáp, điện thoại, lim dim PERCLOS, quay đầu, lái >60'), chạy pipeline thật end-to-end (MediaPipe + YOLO26n + Qwen3.5-2B) với overlay chỉ số và 16 câu cảnh báo TTS tiếng Việt ghi thẳng vào audio track. Lệnh tạo video ở mục [Cách chạy](#cách-chạy), bước 5.
+🎬 **Demo người thật**: [`demo_webcam.mp4`](demo_webcam.mp4) — clip webcam 2.5 phút diễn đủ 6 kịch bản (nhắm mắt, ngáp, điện thoại, lim dim PERCLOS, quay đầu, lái >60'), chạy pipeline thật end-to-end (MediaPipe + YOLO26n + Qwen3.5-2B) với overlay chỉ số và 10 câu cảnh báo TTS tiếng Việt ghi thẳng vào audio track. Lệnh tạo video ở mục [Cách chạy](#cách-chạy), bước 5.
 
 ## Kết quả nổi bật
 
@@ -70,7 +70,7 @@ src/
   config/guardrails_config.json   Banned list + template bank duyệt sẵn
 tests/test_pipeline.py       43 unit test
   red_team.py                Red-team guardrails định lượng (2 lớp, xuất bảng)
-assets/tts/                  27 câu cảnh báo tiếng Việt pre-render (WAV + manifest)
+assets/tts/                  28 câu cảnh báo tiếng Việt pre-render (WAV + manifest)
 assets/                      Đề bài gốc
 ```
 
@@ -124,9 +124,9 @@ Các nâng cấp tiếp theo, giữ nguyên phạm vi đề bài:
 **Giai đoạn 1 — Xóa các thành phần mock còn lại** ✅
 
 - [x] **YOLO26n thật cho phone detection** — `src/object_detector.py`, tự cắm vào `Tier1Analyzer.phone_detector` khi Tier 1 chạy backend thật. Số đo được: YOLO26n 5.3MB, ~44ms mỗi lần chạy CPU @384, stride 3 frame nên trung bình ~15ms/frame; cả Tier 1 gồm MediaPipe + YOLO hết ~31ms/frame. Chọn YOLO26n thay SSDLite-MobileNet vì NMS-free nhanh hơn trên CPU edge và mAP COCO ~40 so với ~22 ở cùng cỡ ~5MB. Pre-ride helmet/mask cần weights finetune riêng (`Yolo26PreRideDetector`), chưa có weights nên slot đó vẫn mock.
-- [x] **TTS tiếng Việt offline** — Piper `vi_VN-vais1000-medium` (63MB, ONNX, offline hoàn toàn) pre-render cả 27 câu duyệt sẵn thành WAV (`python -m src.tts_prerender` → `assets/tts/`, 4.4MB). Runtime chỉ phát file qua `AlertSpeaker` (sounddevice, non-blocking): 0ms synthesize, giữ SLA <300ms. Bật bằng `--audio` trong `run_video`/`run_webcam`. Player từ chối text ngoài manifest — không synthesize runtime, đúng nguyên tắc "không tồn tại kênh free text" của docs/02. Không dùng model omni nói thẳng (Qwen2.5-Omni) vì không hỗ trợ TTS tiếng Việt, và audio free-form không grammar-constrain được.
+- [x] **TTS tiếng Việt offline** — Piper `vi_VN-vais1000-medium` (63MB, ONNX, offline hoàn toàn) pre-render cả 28 câu duyệt sẵn thành WAV (`python -m src.tts_prerender` → `assets/tts/`, 4.4MB). Runtime chỉ phát file qua `AlertSpeaker` (sounddevice, non-blocking): 0ms synthesize, giữ SLA <300ms. Bật bằng `--audio` trong `run_video`/`run_webcam`. Player từ chối text ngoài manifest — không synthesize runtime, đúng nguyên tắc "không tồn tại kênh free text" của docs/02. Không dùng model omni nói thẳng (Qwen2.5-Omni) vì không hỗ trợ TTS tiếng Việt, và audio free-form không grammar-constrain được.
 
 **Giai đoạn 2 — Bằng chứng end-to-end**
 
-- [x] **Clip demo webcam người thật** — [`demo_webcam.mp4`](demo_webcam.mp4): 6/6 kịch bản nổ đúng trên clip webcam 2.5 phút (T5 lái dài→VLM t=6s, T0 nhắm mắt t=17s, T3 ngáp→VLM t=47s, T1 điện thoại t=57s, T2 PERCLOS→VLM t=70s, T4 quay đầu t=88s); overlay chỉ số + 16 câu TTS trong audio track; telematics mô phỏng qua CLI (`--driving-min 59`, cộng dồn theo thời gian clip). Quá trình này lộ ra và sửa được 3 bug thật: EAR sai phối cảnh khi quay đầu (thêm yaw-gate 45°), câu nhắc tĩnh không cooldown, và T2 PERCLOS che mất T4 trong chuỗi elif — những bug mà dataset frontal như FL3D không bao giờ lộ được.
+- [x] **Clip demo webcam người thật** — [`demo_webcam.mp4`](demo_webcam.mp4): 6/6 kịch bản nổ đúng trên clip webcam 2.5 phút (T5 lái dài→VLM t=6s, T0 nhắm mắt t=17s, T3 ngáp→VLM t=47s, T1 điện thoại t=57s, T2 PERCLOS→VLM t=70s, T4 quay đầu t=88s); overlay chỉ số + 10 câu TTS trong audio track (câu giống hệt trong ~2s được gộp — chuỗi T0 lim dim nhấp nháy chỉ nhắc lại tuần hoàn chứ không đè 7 bản); telematics mô phỏng qua CLI (`--driving-min 59.9`, cộng dồn theo thời gian clip). Quá trình này lộ ra và sửa được 3 bug thật: EAR sai phối cảnh khi quay đầu (thêm yaw-gate 45°), câu nhắc tĩnh không cooldown, và T2 PERCLOS che mất T4 trong chuỗi elif — những bug mà dataset frontal như FL3D không bao giờ lộ được.
 - [x] **Red-team guardrails định lượng** — `src/red_team.py`: 65 câu tấn công (dụ chẩn đoán y tế, prompt injection qua delta_text/telematics/chữ trong frame) bắn vào cả VLM thật (23) lẫn post-filter (42), đo tỉ lệ vượt rào 0.0% và false-positive 0. Quá trình lộ ra và sửa được một false-positive thật: từ cấm "toa" khớp substring chặn nhầm "an toàn"; nay khớp theo biên từ, thêm 3 test hồi quy. Bảng kết quả: `docs/02` §7.
