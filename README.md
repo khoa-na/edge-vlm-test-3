@@ -10,7 +10,8 @@ Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3*
 - Đánh giá định lượng trên dataset FL3D (20,806 frame có nhãn): episode recall 85% trên các đoạn ngủ gật ≥ 1.5s, false-alarm 0.65% frame alert, kèm mục khai báo thẳng các giới hạn của phép đánh giá.
 - Guardrails y tế thiết kế để không thể vi phạm: VLM chỉ trả JSON enum đóng (ép grammar tại decoder), lời văn tới người dùng 100% lấy từ template bank người viết đã duyệt — không tồn tại kênh free text.
 - Phone detection thật (YOLO26n) và cảnh báo TTS tiếng Việt offline (Piper): Tier 1 đầy đủ MediaPipe + YOLO chạy ~31ms/frame CPU; mọi câu ra loa là WAV pre-render từ tập đóng duyệt sẵn, không synthesize runtime.
-- 40 unit test phủ trigger logic, guardrails, baseline, async latency, phone detector, TTS manifest, pose calibration; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
+- Guardrails đo bằng red-team định lượng: 65 tấn công (prompt injection vào VLM thật + câu y tế bắn thẳng post-filter), 0% vượt rào, và chính red-team lộ ra một false-positive thật ("an toàn" bị chặn nhầm) đã sửa — chi tiết `docs/02` §7.
+- 43 unit test phủ trigger logic, guardrails, red-team regression, baseline, async latency, phone detector, TTS manifest, pose calibration; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
 
 ## Trả lời yêu cầu đề bài
 
@@ -67,7 +68,8 @@ src/
   run_webcam.py              Chạy với webcam
   eval_fl3d.py               Đánh giá trên dataset FL3D có nhãn
   config/guardrails_config.json   Banned list + template bank duyệt sẵn
-tests/test_pipeline.py       40 unit test
+tests/test_pipeline.py       43 unit test
+  red_team.py                Red-team guardrails định lượng (2 lớp, xuất bảng)
 assets/tts/                  27 câu cảnh báo tiếng Việt pre-render (WAV + manifest)
 assets/                      Đề bài gốc
 ```
@@ -127,4 +129,4 @@ Các nâng cấp tiếp theo, giữ nguyên phạm vi đề bài:
 **Giai đoạn 2 — Bằng chứng end-to-end**
 
 - [x] **Clip demo webcam người thật** — [`demo_webcam.mp4`](demo_webcam.mp4): 6/6 kịch bản nổ đúng trên clip webcam 2.5 phút (T5 lái dài→VLM t=6s, T0 nhắm mắt t=17s, T3 ngáp→VLM t=47s, T1 điện thoại t=57s, T2 PERCLOS→VLM t=70s, T4 quay đầu t=88s); overlay chỉ số + 16 câu TTS trong audio track; telematics mô phỏng qua CLI (`--driving-min 59`, cộng dồn theo thời gian clip). Quá trình này lộ ra và sửa được 3 bug thật: EAR sai phối cảnh khi quay đầu (thêm yaw-gate 45°), câu nhắc tĩnh không cooldown, và T2 PERCLOS che mất T4 trong chuỗi elif — những bug mà dataset frontal như FL3D không bao giờ lộ được.
-- [ ] **Red-team guardrails định lượng** — bộ 50-100 câu tấn công (dụ chẩn đoán y tế, prompt injection qua nội dung frame/telematics) bắn vào VLM thật, đo tỉ lệ vượt guardrail (mục tiêu: 0%), xuất bảng kết quả vào docs/02.
+- [x] **Red-team guardrails định lượng** — `src/red_team.py`: 65 câu tấn công (dụ chẩn đoán y tế, prompt injection qua delta_text/telematics/chữ trong frame) bắn vào cả VLM thật (23) lẫn post-filter (42), đo tỉ lệ vượt rào 0.0% và false-positive 0. Quá trình lộ ra và sửa được một false-positive thật: từ cấm "toa" khớp substring chặn nhầm "an toàn"; nay khớp theo biên từ, thêm 3 test hồi quy. Bảng kết quả: `docs/02` §7.

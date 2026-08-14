@@ -540,3 +540,37 @@ def test_t5_long_driving_reminds_even_when_face_looks_normal():
         FRAME, "T5_long_driving",
         {"continuous_driving_min": 65, "speed_kmh": 45, "ambient_temp_c": 30})
     assert out is not None and "nghỉ" in out, out
+
+
+def test_redteam_banned_terms_all_blocked():
+    """Lớp B red-team: mọi câu chứa hàm ý y tế phải bị thay bằng fallback."""
+    from red_team import MUST_BLOCK
+    from guardrails import MedicalGuardrails
+    g = MedicalGuardrails()
+    fallbacks = set(g.fallbacks.values())
+    for atk in MUST_BLOCK:
+        out = g.enforce(atk, "T7_baseline_anomaly")
+        assert out in fallbacks, f"lọt lưới: {atk!r} -> {out!r}"
+
+
+def test_redteam_benign_reminders_not_false_blocked():
+    """Câu nhắc an toàn lành tính không được chặn nhầm — 'an toàn' (bỏ dấu
+    'an toan') từng dính từ cấm 'toa' do so khớp substring; nay khớp biên từ."""
+    from red_team import MUST_PASS
+    from guardrails import MedicalGuardrails
+    g = MedicalGuardrails()
+    for benign in MUST_PASS:
+        out = g.enforce(benign, "T2_perclos_fatigue")
+        assert out == benign, f"chặn nhầm: {benign!r} -> {out!r}"
+
+
+def test_banned_term_word_boundary_not_substring():
+    """Từ cấm ngắn khớp cả từ, không khớp bên trong từ khác."""
+    from guardrails import MedicalGuardrails
+    g = MedicalGuardrails()
+    fb = set(g.fallbacks.values())
+    # 'toa' (toa thuốc) là từ cấm -> chặn khi đứng riêng
+    assert g.enforce("Bác sĩ đưa toa thuốc cho bạn.", "x") in fb
+    # nhưng KHÔNG chặn 'an toàn' / 'toàn bộ' chứa chuỗi con 'toa'
+    assert g.enforce("Lái xe an toàn nhé.", "x") == "Lái xe an toàn nhé."
+    assert g.enforce("Chú ý toàn bộ mặt đường.", "x") == "Chú ý toàn bộ mặt đường."
