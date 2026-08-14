@@ -79,7 +79,9 @@ def delivery_channel(telematics: Dict[str, Any]) -> str:
 
 
 class SafetyAndHealthMonitorPipeline:
-    def __init__(self, edge_vlm_path: str, device: str = "cuda",
+    # device: nơi chạy các model Tier 1/2. Mặc định "cpu" — mọi số đo latency
+    # trong docs là CPU thuần; đổi "cuda"/"npu" khi phần cứng edge có
+    def __init__(self, edge_vlm_path: str, device: str = "cpu",
                  profile_id: int = 1, db_path: str = ":memory:",
                  tier1_backend=None, object_detector=None, vlm_mmproj=None,
                  vlm_server_url: Optional[str] = None, phone_detector=None,
