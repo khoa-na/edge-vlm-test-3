@@ -8,6 +8,7 @@ ngày anomaly bị loại khỏi cửa sổ.
 import sqlite3
 import statistics
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional
 
 FEATURES = [
@@ -50,11 +51,19 @@ CREATE TABLE IF NOT EXISTS health_daily (
     is_anomalous INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (profile_id, day, light_bucket, feature_name)
 );
+CREATE TABLE IF NOT EXISTS health_anomaly_days (
+    profile_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    PRIMARY KEY (profile_id, day)
+);
 """
 
 
 class HealthBaseline:
     def __init__(self, db_path: str = ":memory:"):
+        if db_path != ":memory:":
+            db_path = str(Path(db_path).expanduser())
+            Path(db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
         self.db.executescript(_SCHEMA)
         # Trạng thái persistence cho rule "1 feature mạnh lặp 2 phiên liên tiếp"
@@ -75,7 +84,11 @@ class HealthBaseline:
 
     def prune_old(self, now_ts: int) -> None:
         cutoff = now_ts - RETENTION_DAYS * 86400
+        cutoff_day = datetime.fromtimestamp(cutoff, timezone.utc).strftime("%Y-%m-%d")
         self.db.execute("DELETE FROM health_samples WHERE ts < ?", (cutoff,))
+        self.db.execute("DELETE FROM health_daily WHERE day < ?", (cutoff_day,))
+        self.db.execute("DELETE FROM health_anomaly_days WHERE day < ?",
+                        (cutoff_day,))
         self.db.commit()
 
     # ------------------------------------------------------------------
@@ -100,15 +113,26 @@ class HealthBaseline:
                     "INSERT OR REPLACE INTO health_daily "
                     "(profile_id, day, light_bucket, feature_name, day_value, "
                     " session_count, is_anomalous) VALUES (?,?,?,?,?,?,"
-                    " COALESCE((SELECT is_anomalous FROM health_daily WHERE "
-                    "  profile_id=? AND day=? AND light_bucket=? AND feature_name=?), 0))",
+                    " MAX(COALESCE((SELECT is_anomalous FROM health_daily WHERE "
+                    "  profile_id=? AND day=? AND light_bucket=? AND feature_name=?), 0),"
+                    " COALESCE((SELECT 1 FROM health_anomaly_days WHERE "
+                    "  profile_id=? AND day=?), 0)))",
                     (profile_id, day, bucket, feat, statistics.median(vals),
-                     len(vals), profile_id, day, bucket, feat),
+                     len(vals), profile_id, day, bucket, feat,
+                     profile_id, day),
                 )
         self.db.commit()
 
     def mark_day_anomalous(self, profile_id: int, day: str) -> None:
-        """Ngày bị cờ anomaly: loại khỏi cửa sổ baseline (không thành 'bình thường mới')."""
+        """Ghi bền cờ ngày anomaly, kể cả khi daily chưa được aggregate.
+
+        Nhờ bảng sự kiện riêng, trigger giữa chuyến không bị mất khi tiến trình
+        kết thúc trước bước tổng hợp cuối ngày.
+        """
+        self.db.execute(
+            "INSERT OR IGNORE INTO health_anomaly_days (profile_id, day) "
+            "VALUES (?,?)", (profile_id, day),
+        )
         self.db.execute(
             "UPDATE health_daily SET is_anomalous=1 WHERE profile_id=? AND day=?",
             (profile_id, day),

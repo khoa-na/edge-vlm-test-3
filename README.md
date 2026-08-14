@@ -1,132 +1,166 @@
 # Edge VLM Test #3 — Driver Safety & Health Monitor
 
-Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3**: Real-time Driver Safety, Health Trend Detection & Ethical AI Guardrails.
+Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3**. Pipeline mock đáp ứng đầy đủ luồng bắt buộc của đề. Ngoài phần đó, repo còn có bản chạy với MediaPipe, YOLO và Qwen3.5-2B, kết quả đánh giá trên FL3D cùng một video webcam tự quay.
 
-🎬 **Demo người thật**: [`demo_webcam.mp4`](demo_webcam.mp4) — clip webcam 2.5 phút diễn đủ 6 kịch bản (nhắm mắt, ngáp, điện thoại, lim dim PERCLOS, quay đầu, lái >60'), chạy pipeline thật end-to-end (MediaPipe + YOLO26n + Qwen3.5-2B) với overlay chỉ số và 10 câu cảnh báo TTS tiếng Việt ghi thẳng vào audio track. Lệnh tạo video ở mục [Cách chạy](#cách-chạy), bước 5.
+## Tóm tắt bài làm
 
-## Kết quả nổi bật
+| Phạm vi | Trạng thái | Bằng chứng |
+|---|---|---|
+| Two-tier event-driven cascade | Hoàn thành | `src/pipeline.py`, `docs/01-two-tier-cascade.md` |
+| System prompt + anti-medical guardrails | Hoàn thành | `src/guardrails.py`, `src/vlm_backend.py`, `docs/02-medical-guardrails.md` |
+| Health baseline 7 ngày, không lưu ảnh | Hoàn thành ở mức prototype | `src/health_baseline.py`, `docs/03-health-baseline.md` |
+| TODO 1–4 trong skeleton | Hoàn thành | `src/pipeline.py` và các module `src/` |
+| Bốn câu giải trình | Hoàn thành | `docs/05-giai-trinh.md` |
+| Model/data/video thật — phần làm thêm | Có | `docs/04-evaluation.md`, `demo_webcam.mp4` |
 
-- Chạy model thật chứ không chỉ thiết kế: Tier 1 dùng MediaPipe FaceLandmarker, Tier 2 dùng Qwen3.5-2B Q4 qua llama-server, kiểm chứng end-to-end trên frame cabin thật lẫn webcam người thật.
-- Đánh giá định lượng trên dataset FL3D (20,806 frame có nhãn): episode recall 85% trên các đoạn ngủ gật ≥ 1.5s, false-alarm 0.65% frame alert, kèm mục khai báo thẳng các giới hạn của phép đánh giá.
-- Guardrails y tế thiết kế để không thể vi phạm: VLM chỉ trả JSON enum đóng (ép grammar tại decoder), lời văn tới người dùng 100% lấy từ template bank người viết đã duyệt — không tồn tại kênh free text.
-- Phone detection thật (YOLO26n) và cảnh báo TTS tiếng Việt offline (Piper): Tier 1 đầy đủ MediaPipe + YOLO chạy ~31ms/frame CPU; mọi câu ra loa là WAV pre-render từ tập đóng duyệt sẵn, không synthesize runtime.
-- Guardrails đo bằng red-team định lượng: 65 tấn công (prompt injection vào VLM thật + câu y tế bắn thẳng post-filter), 0% vượt rào, và chính red-team lộ ra một false-positive thật ("an toàn" bị chặn nhầm) đã sửa — chi tiết `docs/02` §7.
-- 43 unit test phủ trigger logic, guardrails, red-team regression, baseline, async latency, phone detector, TTS manifest, pose calibration; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
+Các kết quả có thể chạy lại từ repo:
 
-## Trả lời yêu cầu đề bài
+- **50 unit test** cho temporal trigger, guardrails, async latency, persistence, retention, audio priority, TTS manifest và regression.
+- **FL3D, 20.806 frame:** frame accuracy 89,8%; bắt 34/40 episode microsleep ≥1,5 giây, recall 85%.
+- **Red-team mặc định:** 42 case post-filter, 0 vượt rào, 0 false-positive. Khi có llama-server: thêm 23 case prompt injection qua VLM thật, tổng 65 case.
+- **Demo người thật:** [demo_webcam.mp4](demo_webcam.mp4), 143 giây, 640×480 @ 10 FPS, có audio cảnh báo.
 
-| Yêu cầu | Deliverable |
-|---|---|
-| Khối 1 — Two-tier Event-Driven Cascade | [`docs/01-two-tier-cascade.md`](docs/01-two-tier-cascade.md) |
-| Khối 2 — System Prompt & Medical Guardrails | [`docs/02-medical-guardrails.md`](docs/02-medical-guardrails.md) |
-| Khối 3 — Long-term Health Memory (privacy-preserving) | [`docs/03-health-baseline.md`](docs/03-health-baseline.md) |
-| Mục 3 — Python code skeleton (TODO 1–4) | [`src/pipeline.py`](src/pipeline.py) + các module `src/` |
-| Mục 4 — 4 câu hỏi giải trình | [`docs/05-giai-trinh.md`](docs/05-giai-trinh.md) |
-| Kiểm chứng bằng model + dữ liệu thật | [`docs/04-evaluation.md`](docs/04-evaluation.md) |
+## Chạy nhanh
 
-## Kiến trúc trong 30 giây
-
-```
-Camera 5-10 FPS ──► TIER 1: CV nhẹ, mọi frame, <50ms
-                    EAR / MAR / PERCLOS / Head Pose / Phone
-                    + temporal state machine (debounce, cửa sổ trượt)
-                         │
-        ┌────────────────┴──────────────────┐
-   KHẨN CẤP (T0/T1)                  TRIGGER "đắt giá" (T2-T7)
-   TTS tĩnh duyệt sẵn, <300ms         │  async, cooldown 3'
-   KHÔNG BAO GIỜ chờ VLM              ▼
-                              TIER 2: Edge VLM (Qwen3.5-2B Q4)
-                              chỉ trả JSON enum {observation, severity}
-                                      │
-                              context_slots điền tất định từ telematics
-                                      ▼
-                              Template bank duyệt sẵn ──► post-filter ──► loa
-```
-
-Nguyên tắc xuyên suốt: an toàn tức thời thuộc Tier 1 (rule tất định), hiểu ngữ cảnh thuộc Tier 2 (VLM, chấp nhận trễ vài giây) — VLM không bao giờ nằm trên safety path. Health baseline (Khối 3) chỉ lưu 8 feature số mỗi phiên, không ảnh, không embedding, và so sánh z-score với chính người dùng trong 7 ngày gần nhất.
-
-## Cấu trúc repo
-
-```
-docs/
-  01-two-tier-cascade.md     Khối 1 — cascade 2 tầng, bảng trigger, telematics fusion
-  02-medical-guardrails.md   Khối 2 — guardrails 4 lớp, structured output
-  03-health-baseline.md      Khối 3 — schema baseline, anomaly, GDPR
-  04-evaluation.md           Eval FL3D + Tier 2 model thật + giới hạn
-  05-giai-trinh.md           Trả lời 4 câu hỏi Mục 4
-src/
-  pipeline.py                Pipeline chính (TODO 1-4), pre-ride check, async VLM
-  tier1.py                   EAR/MAR/head pose + temporal state machine + feature màu Lab
-  object_detector.py         YOLO26n phone detection (stride + cache) + pre-ride detector
-  guardrails.py              Schema validator + renderer + post-filter tất định
-  audio_alerts.py            Phát cảnh báo TTS pre-render (chỉ câu trong manifest)
-  tts_prerender.py           Build-time: render template bank -> assets/tts/*.wav (Piper)
-  health_baseline.py         SQLite baseline 7 ngày, z-score anomaly
-  vlm_backend.py             LlamaServer / LlamaCpp / Mock — cắm được
-  demo.py                    Demo kịch bản (không cần camera/model)
-  run_video.py               Chạy trên video file / thư mục frame
-  run_webcam.py              Chạy với webcam
-  eval_fl3d.py               Đánh giá trên dataset FL3D có nhãn
-  config/guardrails_config.json   Banned list + template bank duyệt sẵn
-tests/test_pipeline.py       43 unit test
-  red_team.py                Red-team guardrails định lượng (2 lớp, xuất bảng)
-assets/tts/                  28 câu cảnh báo tiếng Việt pre-render (WAV + manifest)
-assets/                      Đề bài gốc
-```
-
-## Cách chạy
+Chỉ cần Python, không cần camera hay model:
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-
-# 1. Demo kịch bản — chạy được mọi nơi, không cần camera/model
-.venv/bin/python -m src.demo
-
-# 2. Unit tests
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest tests/ -q
+.venv/bin/python -m src.demo
+# hoặc chạy cả test + demo smoke:
+./scripts/smoke_test.sh
+```
 
-# 3. Tier 1 thật (MediaPipe) trên dataset FL3D có nhãn
-.venv/bin/pip install mediapipe opencv-python kagglehub
-curl -sL -o models/face_landmarker.task --create-dirs \
-  https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
-.venv/bin/python -c "import kagglehub; kagglehub.dataset_download('matjazmuc/frame-level-driver-drowsiness-detection-fl3d')"
-.venv/bin/python -m src.eval_fl3d --limit-seq 8   # ~10 phút CPU
+Chạy Tier 1 thật trên webcam/video:
 
-# 4. Phone detection thật (YOLO26n, tự tải weights 5.3MB lần đầu)
-.venv/bin/pip install ultralytics
-
-# 5. Cảnh báo TTS tiếng Việt (WAV pre-render sẵn trong assets/tts/)
-.venv/bin/pip install sounddevice   # + sudo apt install libportaudio2
+```bash
+.venv/bin/pip install -r requirements-demo.txt
+./scripts/setup_models.sh tier1
 .venv/bin/python -m src.run_webcam --audio
-#    Xuất video demo có giọng cảnh báo baked-in (cần ffmpeg):
-.venv/bin/python -m src.run_video --input clip.mp4 --output demo.mp4 --audio-mux
-#    Re-render khi sửa template bank (cần Piper + voice 63MB, offline):
-#    pip install piper-tts && python -m src.tts_prerender
+# hoặc không ghi baseline khi chỉ replay demo:
+.venv/bin/python -m src.run_video --input clip.mp4 --db-path :memory:
+```
 
-# 6. Tier 2 thật (Qwen3.5-2B qua llama-server của llama.cpp)
-#    Model: unsloth/Qwen3.5-2B-GGUF -> Q4_K_M (1.28GB) + mmproj-F16 (0.67GB)
+Đánh giá lại FL3D:
+
+```bash
+.venv/bin/pip install -r requirements-eval.txt
+.venv/bin/python -c "import kagglehub; kagglehub.dataset_download('matjazmuc/frame-level-driver-drowsiness-detection-fl3d')"
+.venv/bin/python -m src.eval_fl3d --limit-seq 8
+```
+
+Chạy Tier 2 thật qua llama-server:
+
+```bash
+./scripts/setup_models.sh vlm  # khoảng 2 GB, file GGUF được .gitignore
 llama-server -m models/qwen3.5-2b-q4_k_m.gguf \
   --mmproj models/qwen3.5-2b-mmproj-f16.gguf --port 8090 -c 4096 \
   --chat-template-kwargs '{"enable_thinking": false}'
-.venv/bin/python -m src.run_video --input clip.mp4 --vlm-url http://127.0.0.1:8090
+.venv/bin/python -m src.run_video --input clip.mp4 \
+  --vlm-url http://127.0.0.1:8090 --db-path :memory:
 ```
 
-Mọi thành phần đều pluggable và fail-safe: có model thì chạy thật, không có thì fallback mock, nên demo và test chạy được ở mọi môi trường. Thứ tự ưu tiên Tier 2: llama-server → llama-cpp-python → mock.
+Kiểm tra model nào đang có:
 
-## Ghi chú lựa chọn model Tier 2
+```bash
+./scripts/setup_models.sh check
+```
 
-Qwen3.5-2B được chọn sau khi so với Gemma 4 E2B: nó là 2B thật (GGUF Q4 1.28GB, RAM ~2GB) trong khi E2B raw cỡ ~5B (~3GB); llama.cpp hỗ trợ day-1; và mạnh tiếng Việt. Gemma 4 E2B để làm phương án B nếu roadmap về sau cần thêm audio (phân tích giọng mệt mỏi) — E2B có audio native. Chi tiết tích hợp cùng 3 bài học khi cắm model thật (thinking mode, prompt bias, fact vs judgment): `docs/04` §5.
+## Kiến trúc
 
-## Roadmap
+```text
+Camera 5–10 FPS ──► Tier 1: MediaPipe + YOLO + temporal rules
+                         │
+             ┌───────────┴────────────┐
+             │                        │
+       T0/T1 khẩn cấp            T2–T7 event
+       WAV duyệt sẵn             câu tĩnh ngay nếu cần
+       không chờ VLM                    │
+                                        ▼
+                              Worker VLM một slot, async
+                                        │
+                              JSON enum constrained
+                                        │
+                              template bank + post-filter
+```
 
-Các nâng cấp tiếp theo, giữ nguyên phạm vi đề bài:
+Tier 1 chạy trên mọi frame. MediaPipe trích EAR/MAR và ước lượng pitch/yaw; YOLO26n FP32 `.pt` chạy mỗi ba frame rồi dùng lại confidence ở các frame xen giữa để giảm tải CPU. State machine theo thời gian dùng duration, debounce, cửa sổ trượt và cooldown để tránh kết luận từ một frame nhiễu.
 
-**Giai đoạn 1 — Xóa các thành phần mock còn lại** ✅
+Mọi trigger VLM từ T2 đến T7 đều chạy nền. T0/T1 đi thẳng tới cảnh báo tĩnh; T5 lái lâu và T7 lệch baseline cũng có thể trả câu đã duyệt trước khi worker hoàn tất. Nếu loa đang phát một lời nhắc thường, T0/T1 có quyền ngắt để phát cảnh báo khẩn cấp.
 
-- [x] **YOLO26n thật cho phone detection** — `src/object_detector.py`, tự cắm vào `Tier1Analyzer.phone_detector` khi Tier 1 chạy backend thật. Số đo được: YOLO26n 5.3MB, ~44ms mỗi lần chạy CPU @384, stride 3 frame nên trung bình ~15ms/frame; cả Tier 1 gồm MediaPipe + YOLO hết ~31ms/frame. Chọn YOLO26n thay SSDLite-MobileNet vì NMS-free nhanh hơn trên CPU edge và mAP COCO ~40 so với ~22 ở cùng cỡ ~5MB. Pre-ride helmet/mask cần weights finetune riêng (`Yolo26PreRideDetector`), chưa có weights nên slot đó vẫn mock.
-- [x] **TTS tiếng Việt offline** — Piper `vi_VN-vais1000-medium` (63MB, ONNX, offline hoàn toàn) pre-render cả 28 câu duyệt sẵn thành WAV (`python -m src.tts_prerender` → `assets/tts/`, 4.4MB). Runtime chỉ phát file qua `AlertSpeaker` (sounddevice, non-blocking): 0ms synthesize, giữ SLA <300ms. Bật bằng `--audio` trong `run_video`/`run_webcam`. Player từ chối text ngoài manifest — không synthesize runtime, đúng nguyên tắc "không tồn tại kênh free text" của docs/02. Không dùng model omni nói thẳng (Qwen2.5-Omni) vì không hỗ trợ TTS tiếng Việt, và audio free-form không grammar-constrain được.
+Tier 2 chỉ quyết định `observation` và `severity`. Code điền `context_slots` từ telematics rồi chọn câu tiếng Việt trong template bank; model không trực tiếp viết lời phát ra loa.
 
-**Giai đoạn 2 — Bằng chứng end-to-end**
+## Demo webcam — mốc xem nhanh
 
-- [x] **Clip demo webcam người thật** — [`demo_webcam.mp4`](demo_webcam.mp4): 6/6 kịch bản nổ đúng trên clip webcam 2.5 phút (T5 lái dài→VLM t=6s, T0 nhắm mắt t=17s, T3 ngáp→VLM t=47s, T1 điện thoại t=57s, T2 PERCLOS→VLM t=70s, T4 quay đầu t=88s); overlay chỉ số + 10 câu TTS trong audio track (câu giống hệt trong ~2s được gộp — chuỗi T0 lim dim nhấp nháy chỉ nhắc lại tuần hoàn chứ không đè 7 bản); telematics mô phỏng qua CLI (`--driving-min 59.9`, cộng dồn theo thời gian clip). Quá trình này lộ ra và sửa được 3 bug thật: EAR sai phối cảnh khi quay đầu (thêm yaw-gate 45°), câu nhắc tĩnh không cooldown, và T2 PERCLOS che mất T4 trong chuỗi elif — những bug mà dataset frontal như FL3D không bao giờ lộ được.
-- [x] **Red-team guardrails định lượng** — `src/red_team.py`: 65 câu tấn công (dụ chẩn đoán y tế, prompt injection qua delta_text/telematics/chữ trong frame) bắn vào cả VLM thật (23) lẫn post-filter (42), đo tỉ lệ vượt rào 0.0% và false-positive 0. Quá trình lộ ra và sửa được một false-positive thật: từ cấm "toa" khớp substring chặn nhầm "an toàn"; nay khớp theo biên từ, thêm 3 test hồi quy. Bảng kết quả: `docs/02` §7.
+| Thời gian | Tình huống |
+|---:|---|
+| 00:06 | T5 — lái liên tục quá 60 phút, VLM fusion |
+| 00:17 | T0 — nhắm mắt kéo dài |
+| 00:47 | T3 — ngáp nhiều |
+| 00:57 | T1 — điện thoại |
+| 01:10 | T2 — PERCLOS cao |
+| 01:28 | T4 — quay đầu lặp lại |
+
+Video dùng MediaPipe, YOLO26n và Qwen3.5-2B trên một clip webcam tự quay; dữ liệu telematics được mô phỏng qua CLI. Phần overlay hiển thị EAR/MAR/pitch/yaw, còn audio track chứa các câu WAV đã duyệt sẵn.
+
+## Kết quả và cách đọc số liệu
+
+Phép đánh giá FL3D dùng tám sequence đầu theo thứ tự tên, không chọn theo nhãn. Script phát lại các frame đúng trình tự qua `Tier1Analyzer` thật:
+
+| Chỉ số | Kết quả |
+|---|---:|
+| Frame accuracy | 89,8% |
+| Microsleep episode recall | 34/40 = 85% |
+| False T0 trên frame có nhãn alert | 110/16.881 = 0,65% |
+
+`0,65%` là tỷ lệ **frame đang ở trạng thái T0**, không phải số lần loa phát cảnh báo độc lập. Các frame này tập trung thành cụm. Trước khi đặt SLA production vẫn cần đo số episode báo nhầm trên mỗi giờ bằng những chuyến lái tự nhiên dài hơn. MAR cũng được hiệu chỉnh trên chính FL3D, nên kết quả yawning là in-sample. Phần diễn giải và giới hạn đầy đủ nằm trong `docs/04-evaluation.md`.
+
+Độ trễ khoảng 31 ms/frame của Tier 1 và 4–7 giây/lần gọi VLM được đo trên máy phát triển, không đại diện cho mọi SoC edge.
+
+## Bộ nhớ trạng thái và quyền riêng tư
+
+Runner thật mặc định lưu dữ liệu vào `data/health_baseline.sqlite3`. Có thể chọn hồ sơ cục bộ bằng `--profile-id`, hoặc dùng `--db-path :memory:` nếu không muốn ghi khi replay. Mỗi phiên chỉ giữ tối đa tám chỉ số, không lưu ảnh hay face embedding. Dữ liệu được tổng hợp theo ngày; baseline lấy tối đa bảy ngày hợp lệ gần nhất và tự xóa dữ liệu quá 14 ngày.
+
+Prototype đã có giảm thiểu dữ liệu, lưu bền vững, giới hạn thời gian lưu và loại ngày bất thường khỏi baseline. Mã hóa bằng SQLCipher/Keystore, màn hình xin consent và quyền xóa trong ứng dụng mới chỉ là yêu cầu cho bản production, chưa được triển khai trong repo Python này.
+
+## Khi có và khi thiếu model
+
+| Thành phần | Mặc định khi đủ dependency/model | Khi thiếu |
+|---|---|---|
+| Face landmark | MediaPipe FaceLandmarker | MockLandmarkBackend |
+| Phone detection | YOLO26n COCO, stride 3 | confidence từ backend/mock |
+| Pre-ride helmet/mask/glasses | Có interface `Yolo26PreRideDetector`; cần weights finetune riêng | MockObjectDetector |
+| Tier 2 | llama-server localhost, hoặc llama-cpp-python + mmproj | MockVLMBackend |
+| TTS | WAV Piper pre-render trong `assets/tts/` | Chạy tiếp không tiếng |
+
+Head pose hiện là ước lượng pitch/yaw nhanh từ landmark 2D, có calibration góc camera và yaw gate. `solvePnP` với camera matrix cùng roll đầy đủ là hướng nâng cấp production, không phải claim của implementation hiện tại. YOLO `.pt` hiện chạy FP32; export INT8/NPU cũng là bước triển khai theo phần cứng đích.
+
+## Cấu trúc repo
+
+```text
+docs/                         Thiết kế, guardrails, baseline, eval, giải trình
+src/pipeline.py               Cascade, trigger, async VLM, pre-ride
+src/tier1.py                  Landmark metrics + temporal state machine
+src/object_detector.py        YOLO phone + interface pre-ride
+src/guardrails.py             Schema validator, renderer, post-filter
+src/health_baseline.py        SQLite rolling baseline và anomaly detection
+src/vlm_backend.py            llama-server / llama-cpp / mock
+src/audio_alerts.py           Player WAV có ưu tiên cảnh báo khẩn cấp
+src/run_video.py              Runner video và xuất demo annotate
+src/run_webcam.py             Runner webcam
+src/eval_fl3d.py              Eval dữ liệu thật
+src/red_team.py               Red-team hai lớp
+assets/tts/                   28 WAV duyệt sẵn + manifest
+scripts/setup_models.sh       Tải/check model có checksum
+tests/test_pipeline.py        Unit và regression tests
+```
+
+## Những giới hạn còn lại
+
+- Weights pre-ride cho quai mũ/khẩu trang/kính chưa được train trong repo.
+- Phone detector chưa được benchmark trên một bộ cabin-phone có nhãn riêng và chưa ràng buộc phone với đúng tài xế.
+- Các feature màu/sưng mắt của health baseline là heuristic prototype, chưa được đánh giá lâm sàng và tuyệt đối không dùng để chẩn đoán.
+- SQLite trong prototype chưa mã hóa at-rest.
+- GGUF, YOLO weights và voice model lớn không commit vào Git; script setup tải chúng từ nguồn công khai và kiểm checksum.

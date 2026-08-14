@@ -246,6 +246,50 @@ def test_provisional_baseline_caps_severity(guard):
         "looks_more_tired_than_usual|gentle|none|stopped"]
 
 
+def test_baseline_persists_across_process_reopen(tmp_path):
+    db_path = tmp_path / "nested" / "health.sqlite3"
+    hb = HealthBaseline(str(db_path))
+    _seed_baseline(hb, days=3)
+    hb.db.close()
+
+    reopened = HealthBaseline(str(db_path))
+    base = reopened.get_baseline(1, 1, "eye_openness")
+    assert base is not None and base["day_count"] == 3
+    reopened.db.close()
+
+
+def test_anomaly_mark_survives_aggregation_order():
+    """Trigger T7 thường xảy ra trước end_trip/aggregate_day."""
+    hb = HealthBaseline()
+    day = "2026-08-10"
+    hb.add_sample(1, _day_start_ts(day), 1, {"eye_openness": 0.1})
+    hb.mark_day_anomalous(1, day)
+    hb.aggregate_day(1, day)
+    flag = hb.db.execute(
+        "SELECT is_anomalous FROM health_daily WHERE profile_id=1 AND day=?",
+        (day,),
+    ).fetchone()
+    assert flag == (1,)
+
+
+def test_retention_prunes_samples_daily_and_anomaly_markers():
+    hb = HealthBaseline()
+    old_day, recent_day = "2026-08-01", "2026-08-19"
+    for day in (old_day, recent_day):
+        hb.add_sample(1, _day_start_ts(day), 1, {"eye_openness": 0.3})
+        hb.mark_day_anomalous(1, day)
+        hb.aggregate_day(1, day)
+    hb.prune_old(_day_start_ts("2026-08-20"))
+    for table in ("health_samples", "health_daily", "health_anomaly_days"):
+        old = hb.db.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE profile_id=1 AND "
+            + ("ts < ?" if table == "health_samples" else "day=?"),
+            ((_day_start_ts("2026-08-06"),) if table == "health_samples"
+             else (old_day,)),
+        ).fetchone()[0]
+        assert old == 0, table
+
+
 # ----------------------------------------------------------------------
 # Pipeline end-to-end (mock backends)
 # ----------------------------------------------------------------------
@@ -272,10 +316,87 @@ def test_long_driving_gets_guarded_vlm_response():
 def test_vlm_cooldown_prevents_spam():
     p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf", tier1_backend=MockLandmarkBackend())
     p.tier1.backend.set_scenario(ear=0.30)
+    # Giữ worker bận để frame thứ hai không vô tình lấy kết quả mock đã xong;
+    # điều cần kiểm tra ở đây là T5 không khởi chạy/nhắc tĩnh lần hai.
+    import time as time_mod
+
+    class SlowVLM:
+        def generate(self, *args, **kwargs):
+            time_mod.sleep(0.2)
+            return {"observation": "signs_of_long_trip_fatigue",
+                    "severity": "gentle",
+                    "context_slots": {"trip_factor": "long_drive",
+                                      "vehicle_state": "moving"}}
+
+    p.vlm = SlowVLM()
     telem = {"continuous_driving_min": 91, "speed_kmh": 40}
     out1 = p.process_stream_frame(FRAME, telem, now=0.0)
     out2 = p.process_stream_frame(FRAME, telem, now=1.0)  # trong cooldown
     assert out1 is not None and out2 is None
+
+
+def test_t5_long_driving_vlm_never_blocks_frame_loop():
+    """T5 từng gọi VLM đồng bộ 4-7s; nay phải trả câu tĩnh ngay."""
+    import time as time_mod
+
+    class SlowVLM:
+        def generate(self, *args, **kwargs):
+            time_mod.sleep(0.3)
+            return {"observation": "signs_of_long_trip_fatigue",
+                    "severity": "recommend_rest_now",
+                    "context_slots": {"trip_factor": "long_drive",
+                                      "vehicle_state": "moving"}}
+
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.vlm = SlowVLM()
+    p.tier1.backend.set_scenario(ear=0.30)
+    start = time_mod.monotonic()
+    out = p.process_stream_frame(
+        FRAME, {"continuous_driving_min": 65, "speed_kmh": 45}, now=0.0)
+    elapsed = time_mod.monotonic() - start
+    assert out == p.guardrails.fallbacks["long_drive"]
+    assert elapsed < 0.15
+
+
+def test_t7_health_anomaly_vlm_never_blocks_frame_loop():
+    """Chu kỳ health được phép trích feature sync, nhưng VLM T7 phải chạy nền."""
+    import time as time_mod
+
+    class SlowVLM:
+        def generate(self, *args, **kwargs):
+            time_mod.sleep(0.3)
+            return {"observation": "looks_more_tired_than_usual",
+                    "severity": "gentle",
+                    "context_slots": {"trip_factor": "none",
+                                      "vehicle_state": "moving"}}
+
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.vlm = SlowVLM()
+    p.tier1.backend.set_scenario(ear=0.30)
+    p._extract_health_features = lambda *a, **k: {
+        "eye_openness": 0.2, "perclos": 0.3, "yawn_rate": 2.0,
+        "blink_rate": 24.0, "eye_darkness": 0.8,
+    }
+    p.baseline.check_anomaly = lambda *a, **k: {
+        "is_anomaly": True, "is_provisional": False,
+        "delta_text": "eye_openness lệch 2.5 sigma theo hướng xấu",
+    }
+    start = time_mod.monotonic()
+    out = p.process_stream_frame(FRAME, {"speed_kmh": 45}, now=300.0)
+    elapsed = time_mod.monotonic() - start
+    assert out == p.guardrails.fallbacks["fatigue"]
+    assert elapsed < 0.15
+
+
+def test_periodic_health_skips_low_quality_session():
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(face_found=False)
+    out = p.process_stream_frame(FRAME, {"speed_kmh": 0}, now=300.0)
+    count = p.baseline.db.execute("SELECT COUNT(*) FROM health_samples").fetchone()[0]
+    assert out is None and count == 0
 
 
 def test_t2_t4_instant_alert_never_waits_for_vlm():
@@ -436,6 +557,49 @@ def test_speaker_rejects_free_text():
     assert sp.play("text model tự bịa ra") is False
     assert sp.play(None) is False
     assert sp.play("") is False
+
+
+def test_speaker_critical_alert_preempts_busy_reminder(monkeypatch):
+    import threading
+    import audio_alerts
+
+    events = []
+
+    class BusyThread:
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            events.append(("join", timeout))
+
+    class NewThread:
+        def __init__(self, target, daemon):
+            self.target, self.daemon = target, daemon
+
+        def start(self):
+            events.append(("start", self.daemon))
+
+        def is_alive(self):
+            return False
+
+    class FakeSD:
+        def stop(self):
+            events.append(("stop", None))
+
+    monkeypatch.setattr(audio_alerts.threading, "Thread", NewThread)
+    sp = audio_alerts.AlertSpeaker.__new__(audio_alerts.AlertSpeaker)
+    sp.manifest = {
+        "nhắc thường": Path("normal.wav"),
+        "CẢNH BÁO: tập trung": Path("critical.wav"),
+    }
+    sp._thread = BusyThread()
+    sp._sd = FakeSD()
+    sp._play_lock = threading.Lock()
+
+    assert sp.play("nhắc thường") is False
+    assert events == []
+    assert sp.play("CẢNH BÁO: tập trung") is True
+    assert [name for name, _ in events] == ["stop", "join", "start"]
 
 
 def test_pose_calibration_neutralizes_camera_angle():

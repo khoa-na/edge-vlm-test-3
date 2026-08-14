@@ -10,6 +10,7 @@ Chạy:
 """
 
 import argparse
+import atexit
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +93,10 @@ def main():
     ap.add_argument("--calibrate", type=float, default=5.0, metavar="SEC",
                     help="hiệu chỉnh tư thế trung tính theo N giây đầu clip "
                          "(người ngồi bình thường); 0 = tắt")
+    ap.add_argument("--db-path", default="data/health_baseline.sqlite3",
+                    help="SQLite baseline persistent; dùng :memory: để tắt lưu")
+    ap.add_argument("--profile-id", type=int, default=1,
+                    help="ID hồ sơ cục bộ, không phải face embedding")
     args = ap.parse_args()
     if args.audio_mux and not args.output:
         ap.error("--audio-mux cần --output")
@@ -105,7 +110,9 @@ def main():
 
     monitor = SafetyAndHealthMonitorPipeline(
         edge_vlm_path=args.vlm, vlm_server_url=args.vlm_url,
-        pose_calibration_sec=args.calibrate)
+        pose_calibration_sec=args.calibrate, db_path=args.db_path,
+        profile_id=args.profile_id)
+    atexit.register(monitor.end_trip)
     telematics = {"continuous_driving_min": args.driving_min, "speed_kmh": 45,
                   "ambient_temp_c": 30, "weather": "normal"}
 
@@ -122,7 +129,7 @@ def main():
         n_frames += 1
         if alert and alert != last:
             n_alerts += 1
-            print(f"[t={ts:7.2f}s | {name}] 🔊 {alert}")
+            print(f"[t={ts:7.2f}s | {name}] {alert}")
             if speaker:
                 speaker.play(alert)
             wav = tts_manifest.get(alert.strip())

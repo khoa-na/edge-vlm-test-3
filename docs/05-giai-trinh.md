@@ -1,38 +1,112 @@
-# Câu hỏi giải trình (Documentation)
+# Câu hỏi giải trình
 
-## Câu 1 — Thiết kế kiến trúc tháp 2 tầng (Two-tier Cascade Latency Optimization)
+## Câu 1 — Vì sao chọn kiến trúc tháp hai tầng?
 
-Toàn bộ phân chia trách nhiệm quy về một nguyên tắc: an toàn tức thời thuộc Tier 1, hiểu ngữ cảnh thuộc Tier 2.
+Tôi tách hệ thống theo mức độ khẩn cấp của quyết định: Tier 1 chịu trách
+nhiệm cho cảnh báo tức thời, còn Tier 2 chỉ được gọi khi cần hiểu thêm ngữ
+cảnh. Nhờ vậy, cảnh báo quan trọng không phụ thuộc vào tốc độ của VLM.
 
-Tier 1 chạy mọi frame, dưới 50ms, trên CPU/NPU. MediaPipe FaceLandmarker (478 điểm) cho ra EAR (nhắm mắt, ngưỡng 0.20), MAR (ngáp, ngưỡng 0.35 — hiệu chỉnh trên dataset FL3D), PERCLOS (% nhắm mắt trong cửa sổ 60s) và head pose Euler (pitch dưới −25° là cúi nhìn điện thoại, |yaw| quá 45° là quay đầu). Phone detection dùng YOLO26n INT8, chạy mọi frame vì điện thoại là sự kiện khẩn cấp cần phản hồi dưới 300ms; chọn YOLO26n vì NMS-free/DFL-free cho latency tất định và không rớt accuracy khi quantize INT8. Đè lên các chỉ số thô là temporal state machine: debounce (EAR thấp phải giữ 15 frame liên tục mới tính nhắm mắt, phone cần 3 frame xác nhận), cửa sổ trượt, cooldown. Cảnh báo khẩn cấp T0/T1 phát trực tiếp bằng TTS tĩnh duyệt sẵn, không bao giờ chờ VLM.
+Tier 1 xử lý mọi frame trên CPU. MediaPipe FaceLandmarker cung cấp 478 điểm
+để tính EAR, MAR, PERCLOS và góc quay đầu gần đúng. Ngưỡng EAR là 0,20; ngưỡng
+MAR được hiệu chỉnh trên FL3D xuống 0,35. Phone detector dùng YOLO26n COCO
+`.pt` FP32, chạy mỗi ba frame và dùng lại confidence ở các frame xen giữa.
+Trên máy phát triển, riêng YOLO mất khoảng 44 ms mỗi lần chạy; khi ghép với
+MediaPipe, pipeline trung bình khoảng 31 ms mỗi frame. Debounce, cửa sổ trượt
+và cooldown giúp phân biệt một trạng thái kéo dài với nhiễu ở một frame. T0
+và T1 dùng câu TTS tĩnh, có thể ngắt một lời nhắc thường đang phát và không
+bao giờ chờ VLM. `solvePnP`, roll đầy đủ và INT8/NPU vẫn là phần cần làm khi
+chuyển sang phần cứng production, chưa phải khả năng của prototype này.
 
-Tier 2 là edge VLM quantized, event-driven, độ trễ 1–5s, chỉ chạy khi Tier 1 phát trigger "đắt giá". Một sự kiện đáng gọi VLM khi thỏa cả ba: không khẩn cấp tức thời (khẩn cấp thì rule tự xử), cần ngữ cảnh mà CV thuần không phân biệt được (mệt thật hay kính râm? cúi tìm đồ hay ngủ gật?), và đã qua debounce cộng cooldown 3 phút. Cụ thể các trigger: PERCLOS > 25%, ngáp ≥ 3 lần/10 phút, quay đầu ≥ 3 lần/30s, lái liên tục quá 60 phút, lệch health baseline, và một chu kỳ nền 5 phút có thể skip khi chip nóng.
+Tier 2 dùng edge VLM quantized và chỉ chạy theo sự kiện. Phép đo hiện tại
+trên CPU mất khoảng 4–7 giây mỗi lần gọi, nên model chạy trên worker nền một
+slot. Những trigger cần thêm ngữ cảnh gồm PERCLOS cao, ngáp lặp lại, quay đầu
+nhiều, lái liên tục quá lâu và lệch health baseline. Trong lúc chờ model,
+T2–T5/T7 vẫn có thể trả một câu tĩnh đã duyệt nếu tình huống cần phản hồi sớm.
+Theo dõi nhiệt độ chip và bỏ bớt chu kỳ suy luận khi thiết bị nóng mới chỉ là
+điểm tích hợp dự kiến, chưa được triển khai trong repo.
 
-Kiểm chứng trên FL3D (20,806 frame, 8 sequence): chỉ bằng chỉ số hình học, Tier 1 đạt episode recall 85% trên các đoạn microsleep ≥ 1.5s với false alarm 0.65% — đủ gánh toàn bộ phần an toàn, VLM không nằm trên critical path. Chi tiết: `01-two-tier-cascade.md`, `04-evaluation.md`.
+Trên 20.806 frame của tám sequence FL3D, Tier 1 đạt recall 85% ở mức episode
+cho các đoạn microsleep dài từ 1,5 giây, với 0,65% frame alert làm trạng thái
+T0 bật. Kết quả chưa đủ để coi là chứng nhận production, nhưng ủng hộ quyết
+định giữ VLM ra khỏi critical path. Chi tiết nằm trong
+[`01-two-tier-cascade.md`](01-two-tier-cascade.md) và
+[`04-evaluation.md`](04-evaluation.md).
 
-## Câu 2 — Kiểm soát rủi ro y tế & pháp lý (Medical Guardrails)
+## Câu 2 — Làm thế nào hạn chế rủi ro y tế và pháp lý?
 
-Xuất phát điểm: không thể đạt "100%" bằng cách kiểm duyệt free text, nên phải đổi bài toán — model không bao giờ được viết lời văn.
+Tôi không để model tự viết câu đưa tới người dùng. VLM chỉ chọn một intent
+trong schema đóng; code mới là phần ánh xạ intent đó sang câu đã được viết và
+duyệt trước.
 
-Bốn lớp, trong đó hai lớp giữa là tất định:
+Thiết kế có bốn lớp:
 
-1. Prompt engineering: system prompt định nghĩa allowlist hành vi (chỉ quan sát bề ngoài và khuyến nghị nghỉ ngơi) kèm few-shot GOOD/BAD. Lớp này nâng chất lượng chọn intent, không gánh trách nhiệm an toàn.
-2. Grammar/negative constraints — lớp bảo đảm chính: GBNF grammar ép VLM chỉ xuất JSON enum đóng `{observation, severity, trip_factor, vehicle_state}`, chừng vài chục tổ hợp. Validator tất định từ chối mọi key/value ngoài schema. Renderer bằng code ánh xạ tổ hợp sang câu trong ngân hàng template người viết, đã duyệt pháp lý. Từ cấm không thể xuất hiện, đơn giản vì lời văn không do model sinh.
-3. Deterministic post-filtering, lưới thứ hai: quét banned list (cả bản không dấu như "thieu mau"), pattern y tế (mmHg, bpm, số đo "120/80"), trần độ dài — áp lên mọi text trước khi ra loa. Vi phạm thì thay toàn bộ câu bằng fallback template, không vá từng phần vì câu vá dễ giữ nguyên hàm ý chẩn đoán.
-4. Fail-closed: mọi nhánh lỗi (VLM timeout, JSON hỏng, filter exception) đổ về template an toàn duyệt sẵn. Audit log không chứa ảnh, đủ để chứng minh tuân thủ.
+1. System prompt giới hạn nhiệm vụ ở quan sát bề ngoài và khuyến nghị nghỉ
+   ngơi, kèm ví dụ tốt/xấu. Prompt giúp model chọn đúng intent nhưng không
+   được xem là lớp bảo đảm an toàn.
+2. Grammar ép đầu ra thành JSON gồm bốn enum: `observation`, `severity`,
+   `trip_factor` và `vehicle_state`. Validator từ chối key hoặc value nằm
+   ngoài schema. Sau đó renderer chọn câu trong template bank; model không
+   có đường để đưa free text thẳng ra loa.
+3. Post-filter quét từ cấm, cả dạng không dấu, mẫu số đo y tế như `mmHg`,
+   `bpm`, `120/80`, cùng giới hạn độ dài. Nếu vi phạm, toàn bộ câu được thay
+   bằng fallback an toàn thay vì cố sửa từng từ.
+4. Hệ thống fail closed: timeout, JSON hỏng hoặc lỗi filter đều quay về
+   template đã duyệt. Audit log chỉ lưu metadata cần thiết, không lưu ảnh.
 
-Vì sao dám nói "không bao giờ": mọi câu tới người dùng hoặc là template duyệt sẵn, hoặc không tồn tại. Việc kiểm chứng thu về review từng template đúng một lần, thay vì kiểm duyệt không gian ngôn ngữ tự nhiên vô hạn tại runtime. Test tự động xác nhận 100% banned term bị chặn. Chi tiết: `02-medical-guardrails.md`.
+Mức bảo đảm ở đây đến từ cấu trúc đầu ra đóng, không phải từ lời hứa rằng
+model ngôn ngữ sẽ luôn nghe prompt. Bộ test hiện kiểm tra mọi từ cấm trong
+danh sách cấu hình đều bị chặn; khi triển khai thực tế, template và banned
+list vẫn cần được pháp chế rà soát theo ngôn ngữ và thị trường sử dụng. Xem
+thêm [`02-medical-guardrails.md`](02-medical-guardrails.md).
 
-## Câu 3 — Bảo vệ quyền riêng tư (Privacy-Preserving Health Baseline)
+## Câu 3 — Health baseline bảo vệ quyền riêng tư ra sao?
 
-Nguyên tắc gói trong một câu: lưu SỐ, không lưu ẢNH. Mỗi phiên đo (5 phút một lần) trích trên thiết bị khoảng 8 feature vô hướng — quầng thâm (độ sáng hốc mắt so với má), độ mở mắt, sưng mí, độ tái (kênh a Lab má so với trán), sắc môi (a_môi/a_má), blink rate, PERCLOS, yawn rate — rồi hủy frame ngay trong RAM. Các feature màu đều là tỉ lệ giữa hai vùng trên cùng khuôn mặt nên tự chuẩn hóa ánh sáng, cộng thêm bucket theo dải lux để chỉ so sánh giữa các phiên cùng điều kiện sáng.
+Nguyên tắc tôi dùng là “lưu số, không lưu ảnh”. Cứ mỗi 5 phút, pipeline trích
+tám feature ngay trên thiết bị: độ tối vùng dưới mắt, độ mở mắt, độ sưng mí,
+độ nhợt của da, chỉ số màu môi, tần suất chớp mắt, PERCLOS và tần suất ngáp.
+Frame chỉ tồn tại trong RAM trong lúc xử lý. Các feature màu dùng tỷ lệ giữa
+hai vùng trên cùng khuôn mặt, đồng thời mỗi mẫu được gắn `light_bucket` để
+chỉ so sánh trong điều kiện sáng tương đương.
 
-Baseline tổng hợp theo ngày (median các phiên, chống lệch theo thời lượng chuyến) rồi lấy mean/std đúng nghĩa trên 7 ngày hợp lệ gần nhất, lưu trong SQLite mã hóa at-rest, khóa theo `profile_id` cục bộ chọn tay — không dùng face embedding để phân biệt người. Anomaly bật khi có 2 feature cùng hướng xấu |z| > 2, hoặc 1 feature |z| > 3 bền qua 2 phiên liên tiếp. Ngày bị cờ anomaly bị loại khỏi cửa sổ baseline, tránh chuyện ốm lâu thành bình thường mới. VLM chỉ nhận delta dạng text — ảnh lịch sử không tồn tại để mà lộ.
+Các phiên trong ngày được gộp bằng median, rồi baseline lấy mean và độ lệch
+chuẩn từ tối đa 7 ngày hợp lệ gần nhất. Dữ liệu nằm trong SQLite cục bộ và
+gắn với `profile_id` do người dùng chọn, không dùng face embedding. Hệ thống
+cảnh báo khi hai feature cùng lệch theo hướng cần chú ý với |z| > 2, hoặc một
+feature có |z| > 3 trong hai phiên liên tiếp. Ngày đã bị cảnh báo được loại
+khỏi baseline để trạng thái bất thường không dần bị học thành bình thường.
+Nếu cần gọi VLM, model chỉ nhận phần chênh lệch dạng text và frame hiện tại;
+không có ảnh lịch sử để gửi.
 
-Về tuân thủ GDPR: data minimization (8 số float, không ảnh, không embedding — embedding vẫn là dữ liệu sinh trắc theo Art. 9), retention 14 ngày tự xóa, xử lý 100% on-device, opt-in riêng, nút xóa hiệu lực tức thời. Các feature vô hướng không đảo ngược được thành khuôn mặt, nên hệ thống nhớ "trạng thái mọi ngày" mà không giữ dữ liệu nhận dạng nào. Chi tiết: `03-health-baseline.md`.
+Prototype đã có retention 14 ngày cho sample, dữ liệu tổng hợp và cờ anomaly.
+SQLite hiện chưa mã hóa, và repo cũng chưa có màn hình opt-in hay chức năng
+xóa theo profile. SQLCipher/Keystore, consent và quyền xóa là các yêu cầu bắt
+buộc khi tích hợp vào sản phẩm. Dù không phải ảnh, các feature vẫn là dữ liệu
+cá nhân khi gắn với hồ sơ người dùng. Chi tiết ở
+[`03-health-baseline.md`](03-health-baseline.md).
 
-## Câu 4 — Tích hợp ngữ cảnh phương tiện (Telematics-VLM Fusion)
+## Câu 4 — Telematics được kết hợp với VLM như thế nào?
 
-Telematics tham gia ở ba điểm của pipeline. Thứ nhất, điều biến trigger: lái đêm hoặc quá 90 phút liên tục thì hạ ngưỡng PERCLOS từ 25% xuống 20% (rủi ro tích lũy cao thì phải nhạy hơn); thời tiết quyết định pre-ride check có nhắc khẩu trang, kính hay không. Thứ hai, input contract của VLM: khối JSON chuẩn hóa `{vehicle_state, speed_kmh, continuous_driving_min, ambient_temp_c, weather}` để VLM chọn `trip_factor` và lời nhắc dẫn được căn cứ cụ thể. Thứ ba, chính sách phát theo trạng thái xe: đang chạy tốc độ cao thì một câu âm thanh ngắn, không màn hình; kẹt xe chạy chậm thì câu đầy đủ hơn; đang dừng đỗ thì lời nhắc đầy đủ kèm màn hình và tóm tắt chuyến. Cùng một phát hiện, hành vi khác nhau.
+Telematics tham gia vào cả logic phát hiện lẫn cách đưa lời nhắc. Khi lái ban
+đêm hoặc liên tục quá 90 phút, ngưỡng PERCLOS giảm từ 25% xuống 20%. Thời
+tiết cũng được dùng để quyết định có nhắc khẩu trang hoặc kính ở bước
+pre-ride hay không. Các dữ kiện như `speed_kmh`, `continuous_driving_min`,
+`ambient_temp_c` và `weather` được code chuyển thành `trip_factor` và
+`vehicle_state`; VLM không tự suy đoán những thông tin này từ ảnh.
 
-Với ví dụ của đề bài — lái 2 tiếng, trời 35°C, VLM thấy mặt mệt — tổ hợp `(looks_more_tired_than_usual, recommend_rest_now, long_drive_hot_weather, moving)` render thành: *"Bạn đã lái hơn hai tiếng dưới trời nắng nóng rồi, phía trước có chỗ mát thì tấp vào uống chút nước nghỉ vài phút nhé"* — dẫn cả ba căn cứ, phát bằng âm thanh ngắn vì xe đang chạy. Nếu xe đang đỗ, câu chuyển thành khuyên nghỉ thêm trước khi khởi hành và hiển thị lên màn hình. Tính thuyết phục đến từ chỗ lời nhắc khớp đúng trải nghiệm người lái ngay thời điểm đó, thay vì một câu chung chung. Chi tiết: `01-two-tier-cascade.md` §6.
+Sau khi có nội dung, `delivery_channel()` chọn `audio_short`, `audio_full`
+hoặc `audio_and_screen` theo tốc độ xe. Runner hiện mới log channel, còn việc
+ẩn hoặc hiện nội dung trên màn hình cần do UI production thực thi.
+
+Với tình huống trong đề — đã lái hai tiếng, nhiệt độ 35°C và VLM thấy người
+lái trông mệt hơn thường ngày — tổ hợp
+`(looks_more_tired_than_usual, recommend_rest_now, long_drive_hot_weather, moving)`
+được render đúng theo template hiện tại:
+
+> Bạn đã lái liên tục khá lâu dưới trời nắng nóng và trông khá mệt, hãy tấp
+> vào chỗ mát nghỉ ngơi rồi hãy đi tiếp nhé.
+
+Khi xe đang chạy, câu được phát dưới dạng âm thanh ngắn. Nếu xe đã dừng,
+renderer chọn một template phù hợp hơn và channel có thể kèm màn hình. Lời
+nhắc nhờ vậy phản ánh đúng thời gian lái, thời tiết và quan sát hiện tại mà
+không để model bịa thêm dữ kiện. Phần luồng xử lý được mô tả ở mục 6 của
+[`01-two-tier-cascade.md`](01-two-tier-cascade.md).
