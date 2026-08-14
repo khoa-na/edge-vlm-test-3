@@ -46,7 +46,7 @@ không phải từng frame):
 
 - **Episode recall: 34/40 = 85%** — đoạn microsleep ≥ 1.5s có ít nhất 1 lần
   cảnh báo T0 nổ trong đoạn.
-- **False T0: 113/16,881 frame alert (0.67%)** — các frame báo giả tập trung
+- **False T0: 110/16,881 frame alert (0.65%)** — các frame báo giả tập trung
   thành vài cụm nheo mắt kéo dài bị đọc nhầm, không rải đều; production giảm
   tiếp bằng per-user EAR calibration (ngưỡng 0.20 cố định không hợp mọi
   hình dạng mắt).
@@ -63,7 +63,7 @@ không phải từng frame):
    microsleep; đổi thứ tự ưu tiên (MAR trước) đưa yawning lên 81%. Với DMS
    thì nhầm lẫn này lành tính — cả hai đều là tín hiệu mệt mỏi, đều dẫn tới
    nhắc nghỉ — nhưng thứ tự đúng giúp đếm ngáp (T3) chính xác.
-4. **7% alert bị gán microsleep ở mức frame** nhưng chỉ 0.67% frame alert
+4. **7% alert bị gán microsleep ở mức frame** nhưng chỉ 0.65% frame alert
    gây báo giả T0 ở mức pipeline — debounce 1.5s lọc gần hết nheo mắt/nhìn
    xuống tự nhiên; đây chính là lý do temporal state machine bắt buộc phải có.
 5. **6 đoạn microsleep bị sót (recall 85%)**: chủ yếu người lái nhắm hờ
@@ -122,3 +122,25 @@ path); trên NPU/GPU edge thực tế sẽ nhanh hơn đáng kể.
   chưa phải toàn bộ dataset; chạy full bằng `--limit-seq 0` (~40 phút CPU).
 - FPS nguồn giả định 25 (NITYMED); sai số FPS ảnh hưởng định nghĩa đoạn
   ≥ 1.5s ở mức ±1 frame.
+
+## 6. Bổ sung sau demo webcam thật (gate EAR theo yaw)
+
+Chạy pipeline trên clip webcam người thật lộ ra lớp lỗi FL3D không có:
+khi tài xế **quay đầu** (yaw 45-94°), landmark mắt bị "dẹt" theo phối cảnh
+— mắt mở đo như nhắm, PERCLOS vọt oan, cảnh báo buồn ngủ lặp hàng chục
+lần. Sửa hai tầng:
+
+1. **Gate EAR/MAR theo yaw** (`EAR_VALID_YAW_DEG = 45°`): frame quay đầu
+   quá ngưỡng coi là *không có dữ liệu mắt/miệng* — không đếm vào
+   closed/PERCLOS/blink/yawn (đường đếm quay đầu T4 vẫn chạy riêng).
+   Chọn 45° sau khi đo cả hai phía: 35° cắt oan 2 episode ngủ gật FL3D
+   (người gục đầu nghiêng, recall 85% → 80%); 45° giữ nguyên recall 85%,
+   false T0 còn giảm nhẹ (0.67% → 0.65%) — số ở mục 3 là số sau gate.
+2. **Cooldown cho câu nhắc tĩnh T2-T4**: PERCLOS/ngáp là trạng thái kéo
+   dài nhiều phút, không phải sự kiện — trước đó câu nhắc trả về mỗi frame
+   (spam ~20 lần/phút), giờ mỗi loại 1 lần per cooldown 180s như VLM.
+
+Bài học: eval trên dataset chính diện (FL3D quay người lái nhìn đường)
+không phát hiện được lỗi phối cảnh — phải chạy trên chuyển động đầu thật
+mới lộ. Đây là lý do demo người thật nằm trong quy trình kiểm chứng,
+không chỉ để trình diễn.

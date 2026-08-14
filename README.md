@@ -2,12 +2,15 @@
 
 Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3**: Real-time Driver Safety, Health Trend Detection & Ethical AI Guardrails.
 
+🎬 **Demo người thật**: [`demo_webcam.mp4`](demo_webcam.mp4) — webcam 2.5 phút diễn đủ 6 kịch bản (nhắm mắt, ngáp, điện thoại, lim dim PERCLOS, quay đầu, lái >60'), pipeline thật end-to-end (MediaPipe + YOLO26n + Qwen3.5-2B), overlay chỉ số + 10 câu cảnh báo TTS tiếng Việt ghi thẳng vào audio track. Lệnh tạo: mục [Cách chạy](#cách-chạy) bước 5.
+
 ## Kết quả nổi bật
 
 - **Chạy model thật, không chỉ thiết kế**: Tier 1 dùng MediaPipe FaceLandmarker, Tier 2 dùng **Qwen3.5-2B Q4** qua llama-server — kiểm chứng end-to-end trên frame cabin thật.
-- **Đánh giá định lượng trên dataset FL3D** (20,806 frame có nhãn): episode recall **85%** trên các đoạn ngủ gật ≥ 1.5s, false-alarm **0.67%** frame alert, kèm mục khai báo giới hạn đánh giá.
+- **Đánh giá định lượng trên dataset FL3D** (20,806 frame có nhãn): episode recall **85%** trên các đoạn ngủ gật ≥ 1.5s, false-alarm **0.65%** frame alert, kèm mục khai báo giới hạn đánh giá.
 - **Guardrails y tế kiểu "không thể vi phạm"**: VLM chỉ trả JSON enum đóng (ép grammar tại decoder), lời văn tới người dùng 100% từ template bank người viết đã duyệt — không tồn tại kênh free text.
-- **29 unit test** phủ trigger logic, guardrails, baseline, async latency; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
+- **39 unit test** phủ trigger logic, guardrails, baseline, async latency, phone detector, TTS manifest, pose calibration; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
+- **Phone detection thật (YOLO26n) + cảnh báo TTS tiếng Việt offline (Piper)**: Tier 1 đầy đủ MediaPipe + YOLO chạy ~31ms/frame CPU; mọi câu ra loa là WAV pre-render từ tập đóng duyệt sẵn — không synthesize runtime.
 
 ## Trả lời yêu cầu đề bài
 
@@ -53,7 +56,10 @@ docs/
 src/
   pipeline.py                Pipeline chính (TODO 1-4), pre-ride check, async VLM
   tier1.py                   EAR/MAR/head pose + temporal state machine + feature màu Lab
+  object_detector.py         YOLO26n phone detection (stride + cache) + pre-ride detector
   guardrails.py              Schema validator + renderer + post-filter tất định
+  audio_alerts.py            Phát cảnh báo TTS pre-render (chỉ câu trong manifest)
+  tts_prerender.py           Build-time: render template bank -> assets/tts/*.wav (Piper)
   health_baseline.py         SQLite baseline 7 ngày, z-score anomaly
   vlm_backend.py             LlamaServer / LlamaCpp / Mock — cắm được
   demo.py                    Demo kịch bản (không cần camera/model)
@@ -61,7 +67,8 @@ src/
   run_webcam.py              Chạy với webcam
   eval_fl3d.py               Đánh giá trên dataset FL3D có nhãn
   config/guardrails_config.json   Banned list + template bank duyệt sẵn
-tests/test_pipeline.py       29 unit test
+tests/test_pipeline.py       39 unit test
+assets/tts/                  27 câu cảnh báo tiếng Việt pre-render (WAV + manifest)
 assets/                      Đề bài gốc
 ```
 
@@ -83,7 +90,18 @@ curl -sL -o models/face_landmarker.task --create-dirs \
 .venv/bin/python -c "import kagglehub; kagglehub.dataset_download('matjazmuc/frame-level-driver-drowsiness-detection-fl3d')"
 .venv/bin/python -m src.eval_fl3d --limit-seq 8   # ~10 phút CPU
 
-# 4. Tier 2 thật (Qwen3.5-2B qua llama-server của llama.cpp)
+# 4. Phone detection thật (YOLO26n, tự tải weights 5.3MB lần đầu)
+.venv/bin/pip install ultralytics
+
+# 5. Cảnh báo TTS tiếng Việt (WAV pre-render sẵn trong assets/tts/)
+.venv/bin/pip install sounddevice   # + sudo apt install libportaudio2
+.venv/bin/python -m src.run_webcam --audio
+#    Xuất video demo có giọng cảnh báo baked-in (cần ffmpeg):
+.venv/bin/python -m src.run_video --input clip.mp4 --output demo.mp4 --audio-mux
+#    Re-render khi sửa template bank (cần Piper + voice 63MB, offline):
+#    pip install piper-tts && python -m src.tts_prerender
+
+# 6. Tier 2 thật (Qwen3.5-2B qua llama-server của llama.cpp)
 #    Model: unsloth/Qwen3.5-2B-GGUF -> Q4_K_M (1.28GB) + mmproj-F16 (0.67GB)
 llama-server -m models/qwen3.5-2b-q4_k_m.gguf \
   --mmproj models/qwen3.5-2b-mmproj-f16.gguf --port 8090 -c 4096 \
@@ -96,3 +114,17 @@ Mọi thành phần đều **pluggable + fail-safe**: có model thì chạy th�
 ## Ghi chú lựa chọn model Tier 2
 
 **Qwen3.5-2B** được chọn sau khi so với Gemma 4 E2B: 2B thật (GGUF Q4 1.28GB, RAM ~2GB) so với E2B raw ~5B (~3GB); llama.cpp hỗ trợ day-1; mạnh tiếng Việt. Gemma 4 E2B là phương án B nếu roadmap cần thêm **audio** (phân tích giọng mệt mỏi) — E2B có audio native. Chi tiết tích hợp + 3 bài học khi cắm model thật (thinking mode, prompt bias, fact vs judgment): `docs/04` §5.
+
+## Roadmap
+
+Các nâng cấp tiếp theo, giữ nguyên phạm vi đề bài:
+
+**Giai đoạn 1 — Xóa các thành phần mock còn lại** ✅
+
+- [x] **YOLO26n thật cho phone detection** — `src/object_detector.py`, auto-cắm vào `Tier1Analyzer.phone_detector` khi Tier 1 chạy backend thật (đo được: YOLO26n 5.3MB, ~44ms/lần chạy CPU @384, stride 3 frame nên chỉ ~15ms/frame trung bình; cả Tier 1 gồm MediaPipe + YOLO ~31ms/frame). Lý do chọn YOLO26n thay SSDLite-MobileNet: NMS-free nhanh hơn trên CPU edge, mAP COCO ~40 so với ~22 cùng cỡ ~5MB. Pre-ride helmet/mask cần weights finetune riêng (`Yolo26PreRideDetector`), chưa có weights nên slot đó vẫn mock.
+- [x] **TTS tiếng Việt offline** — Piper `vi_VN-vais1000-medium` (63MB, ONNX, offline 100%) pre-render toàn bộ 27 câu duyệt sẵn thành WAV (`python -m src.tts_prerender` → `assets/tts/`, 4.4MB); runtime chỉ phát file qua `AlertSpeaker` (sounddevice, non-blocking): 0ms synthesize, giữ SLA <300ms. Bật bằng `--audio` trong `run_video`/`run_webcam`. Player từ chối text ngoài manifest — không synthesize runtime, đúng nguyên tắc "không tồn tại kênh free text" (docs/02). Không dùng model omni nói thẳng (Qwen2.5-Omni): không hỗ trợ TTS tiếng Việt, và audio free-form không grammar-constrain được.
+
+**Giai đoạn 2 — Bằng chứng end-to-end**
+
+- [x] **Clip demo webcam người thật** — [`demo_webcam.mp4`](demo_webcam.mp4): 6/6 kịch bản nổ đúng trên clip webcam 2.5 phút (T0 nhắm mắt t=17s, T3 ngáp→VLM t=47s, T1 điện thoại t=57s, T5 lái dài→VLM t=60s, T2 PERCLOS→VLM t=70s, T4 quay đầu t=88s); overlay chỉ số + 10 câu TTS trong audio track; telematics mô phỏng qua CLI (`--driving-min 59`, cộng dồn theo thời gian clip). Quá trình lộ và sửa 3 bug thật: EAR sai phối cảnh khi quay đầu (yaw-gate 45°), câu nhắc tĩnh không cooldown, T2 PERCLOS che mất T4 trong chuỗi elif — dataset frontal (FL3D) không bao giờ lộ được các bug này.
+- [ ] **Red-team guardrails định lượng** — bộ 50-100 câu tấn công (dụ chẩn đoán y tế, prompt injection qua nội dung frame/telematics) bắn vào VLM thật, đo tỉ lệ vượt guardrail (mục tiêu: 0%), xuất bảng kết quả vào docs/02.

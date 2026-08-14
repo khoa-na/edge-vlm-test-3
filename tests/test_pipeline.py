@@ -359,3 +359,171 @@ def test_delivery_channel_policy():
     assert delivery_channel({"speed_kmh": 60}) == "audio_short"
     assert delivery_channel({"speed_kmh": 10}) == "audio_full"
     assert delivery_channel({"speed_kmh": 0}) == "audio_and_screen"
+
+
+# ----------------------------------------------------------------------
+# Object detector (YOLO26n) + TTS audio alerts — giai đoạn 1 roadmap
+# ----------------------------------------------------------------------
+def test_phone_detector_stride_caches_confidence():
+    """YOLO chỉ chạy mỗi N frame; frame giữa dùng lại conf gần nhất."""
+    from object_detector import Yolo26PhoneDetector
+
+    det = Yolo26PhoneDetector.__new__(Yolo26PhoneDetector)  # bỏ qua load model
+    det.stride, det._frame_idx, det._last_conf = 3, 0, 0.0
+    det.imgsz, det.conf, det.device = 384, 0.25, "cpu"
+    calls = []
+
+    class FakeBoxes(list):
+        @property
+        def conf(self):
+            import numpy as _np
+            return _np.array([0.8])
+
+    class FakeResult:
+        boxes = FakeBoxes([1])
+
+    class FakeModel:
+        def predict(self, *a, **k):
+            calls.append(1)
+            return [FakeResult()]
+
+    det.model = FakeModel()
+    confs = [det(FRAME) for _ in range(6)]
+    assert len(calls) == 2                      # chạy frame 0 và 3
+    assert confs == [0.8] * 6                   # frame giữa dùng cache
+
+
+def test_phone_detector_fallback_none_on_missing_weights():
+    from object_detector import try_create_phone_detector
+    assert try_create_phone_detector("nonexistent/path.pt") is None
+
+
+def test_pipeline_mock_backend_never_gets_auto_yolo():
+    """Kịch bản mock điều khiển phone qua phone_conf backend — YOLO không
+    được auto-cắm đè lên (chỉ bật khi Tier 1 là backend thật)."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    assert p.tier1.phone_detector is None
+
+
+def test_tts_manifest_covers_every_approved_sentence():
+    """Mọi câu trong tập đóng duyệt sẵn phải có WAV pre-render — thêm câu
+    mới mà quên chạy src.tts_prerender là test này đỏ."""
+    import json
+    from pipeline import IMMEDIATE_ALERTS, PRE_RIDE_REMINDERS
+    from guardrails import CONFIG_PATH
+
+    tts_dir = Path(__file__).parent.parent / "assets" / "tts"
+    manifest = json.loads((tts_dir / "manifest.json").read_text(encoding="utf-8"))
+    cfg = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    sentences = (set(IMMEDIATE_ALERTS.values()) | set(PRE_RIDE_REMINDERS.values())
+                 | set(cfg["fallback_templates"].values())
+                 | {t for t in cfg["template_bank"].values() if t})
+    for text in sentences:
+        assert text in manifest, f"thiếu TTS cho: {text}"
+        assert (tts_dir / manifest[text]).exists()
+
+
+def test_speaker_rejects_free_text():
+    """AlertSpeaker chỉ phát câu thuộc manifest — text lạ (free text) bị bỏ,
+    không synthesize runtime (docs/02)."""
+    import audio_alerts
+
+    sp = audio_alerts.AlertSpeaker.__new__(audio_alerts.AlertSpeaker)
+    sp.manifest = {"câu duyệt sẵn": "x.wav"}
+    sp._thread = None
+    sp.tts_dir = Path("/nonexistent")
+    assert sp.play("text model tự bịa ra") is False
+    assert sp.play(None) is False
+    assert sp.play("") is False
+
+
+def test_pose_calibration_neutralizes_camera_angle():
+    """Camera lệch -14° (webcam thấp/cao hơn tầm mắt): sau calibration,
+    ngồi bình thường không nổ head-down; cúi thêm thật (-40 raw) vẫn nổ."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend, pose_calibration_sec=5.0)
+    # 6s đầu ngồi bình thường với camera lệch — gom mẫu + chốt offset
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-14.0), seconds=6.0)
+    assert analyzer.pose_calibrated
+    assert out["head_tilted_down"] is False
+    assert abs(out["raw"].pitch_deg) < 1.0     # -14 raw đã về ~0
+    # Giữ nguyên tư thế lệch thêm 8s nữa — vẫn không báo oan
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-14.0), seconds=8.0,
+                      t0=6.0)
+    assert out["head_tilted_down"] is False
+    # Cúi thật: -40 raw = -26 sau hiệu chỉnh, vượt ngưỡng -25
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-40.0), seconds=2.0,
+                      t0=14.0)
+    assert out["head_tilted_down"] is True
+
+
+def test_pose_calibration_disabled_by_default():
+    """pose_calibration_sec=0 (mặc định): đo thô như cũ, eval FL3D không đổi."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend)
+    out = _run_frames(analyzer, backend, dict(pitch_deg=-30.0), seconds=2.0)
+    assert out["head_tilted_down"] is True
+    assert out["raw"].pitch_deg == -30.0
+
+
+def test_ear_gated_when_head_turned():
+    """Quay đầu >35°: EAR không đáng tin — không đếm nhắm mắt/PERCLOS,
+    không nổ T0/T2 oan; bộ đếm quay đầu vẫn chạy bình thường."""
+    backend = MockLandmarkBackend()
+    analyzer = Tier1Analyzer(backend=backend)
+    # 40s "mắt nhắm" nhưng đầu đang quay 60° — EAR là artifact phối cảnh
+    out = _run_frames(analyzer, backend, dict(ear=0.05, yaw_deg=60.0),
+                      seconds=40.0)
+    assert out["immediate_alert"] is None
+    assert out["eyes_closed_duration_sec"] == 0.0
+    assert out["perclos"] == 0.0
+    # Về chính diện mắt nhắm thật -> vẫn nổ T0 như thường
+    out = _run_frames(analyzer, backend, dict(ear=0.05, yaw_deg=0.0),
+                      seconds=2.0, t0=40.0)
+    assert out["immediate_alert"] == "T0_eyes_closed"
+
+
+def test_static_reminder_respects_cooldown():
+    """PERCLOS là trạng thái kéo dài — câu nhắc tĩnh chỉ phát 1 lần mỗi
+    cooldown, không lặp mỗi frame."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(ear=0.10)  # nhắm hờ liên tục -> PERCLOS cao
+    # chạy 35s cho đủ cửa sổ PERCLOS; T0 nổ trước (nhắm liên tục) nên
+    # dùng kịch bản chớp: 2 frame nhắm 1 frame mở
+    alerts = []
+    for i in range(400):
+        ear = 0.10 if i % 3 else 0.30
+        p.tier1.backend.set_scenario(ear=ear)
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=i / 10)
+        if out:
+            alerts.append((i / 10, out))
+    perclos_alerts = [a for _, a in alerts if "buồn ngủ" in a]
+    assert len(perclos_alerts) <= 1  # 40s < cooldown 180s -> tối đa 1 lần
+
+
+def test_t2_cooldown_does_not_mask_t4():
+    """T2 PERCLOS là trạng thái kéo dài nhiều phút — khi T2 đang cooldown,
+    T4 (quay đầu 3 lần/30s) vẫn phải nổ, không bị T2 che mất."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    alerts = []
+    # 0..35s: chớp mắt lim dim -> PERCLOS cao, T2 nổ 1 lần rồi vào cooldown
+    for i in range(350):
+        ear = 0.10 if i % 3 else 0.30
+        p.tier1.backend.set_scenario(ear=ear, yaw_deg=0.0)
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=i / 10)
+        if out:
+            alerts.append(out)
+    assert any("buồn ngủ" in a for a in alerts)  # T2 đã nổ
+    # 35..41s: quay đầu 3 lần (edge-triggered qua ngưỡng 45°); PERCLOS trong
+    # cửa sổ 60s vẫn cao nên T2 vẫn "đúng" nhưng đang cooldown
+    alerts.clear()
+    for i in range(60):
+        yaw = 60.0 if (i // 10) % 2 == 0 else 0.0
+        p.tier1.backend.set_scenario(ear=0.30, yaw_deg=yaw)
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=35 + i / 10)
+        if out:
+            alerts.append(out)
+    assert any("quan sát phía trước" in a for a in alerts), alerts

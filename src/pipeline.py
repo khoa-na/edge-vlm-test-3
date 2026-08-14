@@ -14,6 +14,7 @@ import numpy as np
 try:  # chạy được cả dạng package (python -m src.demo) lẫn script trong src/
     from .guardrails import MedicalGuardrails
     from .health_baseline import HealthBaseline
+    from .object_detector import try_create_phone_detector
     from .tier1 import (PERCLOS_TRIGGER, PERCLOS_TRIGGER_FATIGUED,
                         MediaPipeLandmarkBackend, MockLandmarkBackend,
                         Tier1Analyzer)
@@ -22,6 +23,7 @@ try:  # chạy được cả dạng package (python -m src.demo) lẫn script tr
 except ImportError:
     from guardrails import MedicalGuardrails
     from health_baseline import HealthBaseline
+    from object_detector import try_create_phone_detector
     from tier1 import (PERCLOS_TRIGGER, PERCLOS_TRIGGER_FATIGUED,
                        MediaPipeLandmarkBackend, MockLandmarkBackend,
                        Tier1Analyzer)
@@ -80,14 +82,17 @@ class SafetyAndHealthMonitorPipeline:
     def __init__(self, edge_vlm_path: str, device: str = "cuda",
                  profile_id: int = 1, db_path: str = ":memory:",
                  tier1_backend=None, object_detector=None, vlm_mmproj=None,
-                 vlm_server_url: Optional[str] = None):
+                 vlm_server_url: Optional[str] = None, phone_detector=None,
+                 pose_calibration_sec: float = 0.0):
         self.device = device
         self.profile_id = profile_id
         self.baseline = HealthBaseline(db_path)
         self.guardrails = MedicalGuardrails()
         self.object_detector = object_detector or MockObjectDetector()
         self.vlm_server_url = vlm_server_url
-        self.init_cascade_models(edge_vlm_path, tier1_backend, vlm_mmproj)
+        self.pose_calibration_sec = pose_calibration_sec
+        self.init_cascade_models(edge_vlm_path, tier1_backend, vlm_mmproj,
+                                 phone_detector)
         self._last_vlm_ts: Dict[str, float] = {}
         self._last_periodic_ts = 0.0
         # VLM chạy async 1 slot: T2-T4 phát cảnh báo tĩnh ngay, kết quả VLM
@@ -98,21 +103,31 @@ class SafetyAndHealthMonitorPipeline:
 
     # ------------------------------------------------------------------
     def init_cascade_models(self, vlm_path: str, tier1_backend=None,
-                            vlm_mmproj=None):
+                            vlm_mmproj=None, phone_detector=None):
         """TODO 1: Init Tier 1 (Face Landmark EAR, Head Pose) và Tier 2 (VLM).
 
         Cả hai tầng đều cắm backend: dùng model thật nếu môi trường có,
         fallback mock để demo/test chạy được ở mọi nơi.
         """
         print(f"Loading Tier 1 (CV) & Tier 2 (Edge VLM) on {self.device}...")
+        real_tier1 = False
         if tier1_backend is None:
             try:
                 tier1_backend = MediaPipeLandmarkBackend()
+                real_tier1 = True
                 print("Tier 1: MediaPipe FaceLandmarker (real)")
             except ImportError:
                 tier1_backend = MockLandmarkBackend()
                 print("Tier 1: mock landmark backend (mediapipe not installed)")
-        self.tier1 = Tier1Analyzer(backend=tier1_backend)
+        # YOLO26n chỉ auto-bật khi Tier 1 chạy backend thật: kịch bản mock/test
+        # điều khiển phone qua phone_conf của backend, không để YOLO đè lên
+        if phone_detector is None and real_tier1:
+            phone_detector = try_create_phone_detector()
+            print("Tier 1: YOLO26n phone detector (real)" if phone_detector
+                  else "Tier 1: phone via backend conf (YOLO26n unavailable)")
+        self.tier1 = Tier1Analyzer(
+            backend=tier1_backend, phone_detector=phone_detector,
+            pose_calibration_sec=self.pose_calibration_sec)
 
         # Thứ tự ưu tiên Tier 2: llama-server (model mới day-1) ->
         # llama-cpp-python (embedded) -> mock
@@ -233,12 +248,16 @@ class SafetyAndHealthMonitorPipeline:
         if pending:
             return pending
 
-        # 4. T2-T4: nhắc nhẹ tức thời NGAY; VLM chạy nền, kết quả frame sau
+        # 4. T2-T4: nhắc nhẹ tức thời NGAY; VLM chạy nền, kết quả frame sau.
+        # Câu nhắc tĩnh cũng đi qua cooldown: PERCLOS/ngáp là TRẠNG THÁI kéo
+        # dài nhiều phút — không cooldown thì frame nào cũng lặp lại cùng câu
         if t1["trigger_vlm_needed"]:
-            reason = t1["trigger_reason"]
-            if self._cooldown_ok(reason, now):
-                self._start_async_vlm(frame, reason, telematics)
-            return IMMEDIATE_ALERTS.get(reason)
+            # Nhiều trigger đúng cùng lúc: lấy reason ưu tiên cao nhất còn
+            # ngoài cooldown — T2 đang cooldown không được che T3/T4
+            for reason in t1.get("trigger_reasons") or [t1["trigger_reason"]]:
+                if self._cooldown_ok(reason, now):
+                    self._start_async_vlm(frame, reason, telematics)
+                    return IMMEDIATE_ALERTS.get(reason)
 
         # 5. T5: lái liên tục > 60 phút (telematics thuần; không khẩn cấp nên
         # gọi đồng bộ được, nhưng vẫn không nằm trên safety path)

@@ -15,8 +15,12 @@ from pathlib import Path
 import numpy as np
 
 try:
+    from .audio_alerts import (load_manifest, mux_alerts_into_video,
+                               try_create_speaker)
     from .pipeline import SafetyAndHealthMonitorPipeline
 except ImportError:
+    from audio_alerts import (load_manifest, mux_alerts_into_video,
+                              try_create_speaker)
     from pipeline import SafetyAndHealthMonitorPipeline
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -49,12 +53,18 @@ def iter_frames(input_path: str, fps_hint: float):
         if not cap.isOpened():
             raise SystemExit(f"Không mở được {p}")
         fps = cap.get(cv2.CAP_PROP_FPS) or fps_hint
+        # Lấy mẫu xuống fps_hint (spec pipeline 5-10 FPS): nguồn 30/60fps mà
+        # đưa hết frame vào thì writer (ghi ở fps_hint) kéo dài video gấp
+        # 3-6 lần thời gian thật, audio mux lệch hết; timestamp vẫn theo
+        # thời gian thật của nguồn
+        stride = max(1, round(fps / fps_hint))
         i = 0
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
-            yield i / fps, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), f"frame{i}"
+            if i % stride == 0:
+                yield i / fps, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), f"frame{i}"
             i += 1
         cap.release()
 
@@ -71,25 +81,53 @@ def main():
                     help="đường dẫn mp4 xuất video annotate (EAR/MAR/pose + cảnh báo)")
     ap.add_argument("--driving-min", type=float, default=30,
                     help="continuous_driving_min giả lập cho telematics")
+    ap.add_argument("--audio", action="store_true",
+                    help="phát cảnh báo TTS tiếng Việt khi chạy (cần assets/tts/)")
+    ap.add_argument("--audio-mux", action="store_true",
+                    help="ghi giọng cảnh báo TTS vào video --output (cần ffmpeg)")
+    ap.add_argument("--calibrate", type=float, default=5.0, metavar="SEC",
+                    help="hiệu chỉnh tư thế trung tính theo N giây đầu clip "
+                         "(người ngồi bình thường); 0 = tắt")
     args = ap.parse_args()
+    if args.audio_mux and not args.output:
+        ap.error("--audio-mux cần --output")
 
     import cv2
 
-    monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
-                                             vlm_server_url=args.vlm_url)
+    speaker = try_create_speaker() if args.audio else None
+    if args.audio and speaker is None:
+        print("Audio không khả dụng (thiếu assets/tts hoặc sounddevice) — chạy tiếp không tiếng")
+    tts_manifest = load_manifest() if args.audio_mux else {}
+
+    monitor = SafetyAndHealthMonitorPipeline(
+        edge_vlm_path=args.vlm, vlm_server_url=args.vlm_url,
+        pose_calibration_sec=args.calibrate)
     telematics = {"continuous_driving_min": args.driving_min, "speed_kmh": 45,
                   "ambient_temp_c": 30, "weather": "normal"}
 
     writer = None
     n_frames, n_alerts, last = 0, 0, None
     alert_banner, banner_until = "", 0.0
+    audio_events = []  # (timestamp_sec, wav_path) cho --audio-mux
 
     for ts, frame, name in iter_frames(args.input, args.fps):
+        # driving_min cộng dồn theo thời gian clip — hành trình dài dần như
+        # thật, T5 (>60') nổ giữa clip thay vì ngay frame đầu khi khai 65'
+        telematics["continuous_driving_min"] = args.driving_min + ts / 60
         alert = monitor.process_stream_frame(frame, telematics, now=ts)
         n_frames += 1
         if alert and alert != last:
             n_alerts += 1
             print(f"[t={ts:7.2f}s | {name}] 🔊 {alert}")
+            if speaker:
+                speaker.play(alert)
+            wav = tts_manifest.get(alert.strip())
+            if wav is not None:
+                # 1 slot như AlertSpeaker: câu trước chưa đọc xong thì câu
+                # mới không chèn đè (ước lượng theo kích thước WAV 22kHz)
+                if not audio_events or ts >= audio_events[-1][0] + (
+                        audio_events[-1][1].stat().st_size / (22050 * 2)):
+                    audio_events.append((ts, wav))
         if alert:
             alert_banner, banner_until = alert, ts + 2.0  # giữ banner 2s
         last = alert
@@ -138,6 +176,8 @@ def main():
 
     if writer is not None:
         writer.release()
+        if args.audio_mux and mux_alerts_into_video(args.output, audio_events):
+            print(f"Đã ghi {len(audio_events)} câu cảnh báo TTS vào audio track")
         print(f"Video annotate: {args.output}")
     print(f"\nXử lý {n_frames} frame, {n_alerts} cảnh báo.")
 

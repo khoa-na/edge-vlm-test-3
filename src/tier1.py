@@ -8,7 +8,7 @@ metric thô; Tier1Analyzer lo phần temporal state machine (debounce, PERCLOS,
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -33,6 +33,7 @@ FACE_GAP_RESET_SEC = 0.5         # mất mặt quá lâu thì reset các bộ đ
 PHONE_CONF_THRESHOLD = 0.5
 PHONE_CONFIRM_FRAMES = 3
 PHONE_RELEASE_FRAMES = 10
+EAR_VALID_YAW_DEG = 45.0  # quá góc này landmark mắt/miệng không đáng tin
 
 
 @dataclass
@@ -192,8 +193,19 @@ class Tier1Analyzer:
 
     backend: Any = field(default_factory=MockLandmarkBackend)
     phone_detector: Optional[Any] = None
+    # Hiệu chỉnh tư thế trung tính theo từng người/lần gắn camera: gom
+    # pitch/yaw trong N giây đầu có mặt (người ngồi bình thường), lấy median
+    # làm gốc 0 rồi trừ khỏi mọi phép đo sau đó. 0 = tắt. Camera lệch tầm
+    # mắt ±15° là chuyện thường (webcam laptop, dashboard mount) — không
+    # hiệu chỉnh thì ngưỡng cúi đầu -25° bị ăn mòn gần hết margin.
+    pose_calibration_sec: float = 0.0
 
     def __post_init__(self):
+        self._calib_start: Optional[float] = None
+        self._calib_samples: list = []
+        self._pitch_offset = 0.0
+        self._yaw_offset = 0.0
+        self.pose_calibrated = self.pose_calibration_sec <= 0
         self._eyes_closed_since: Optional[float] = None
         self._pitch_down_since: Optional[float] = None
         self._yawn_started: Optional[float] = None
@@ -225,6 +237,7 @@ class Tier1Analyzer:
             "raw": m,
             "trigger_vlm_needed": False,
             "trigger_reason": None,
+            "trigger_reasons": [],
             "immediate_alert": None,
         }
         if not m.face_found:
@@ -239,8 +252,37 @@ class Tier1Analyzer:
             self._yawn_started = None
         self._last_face_ts = now
 
+        # --- Calibration tư thế trung tính (N giây đầu có mặt) ---
+        if not self.pose_calibrated:
+            self._calib_start = self._calib_start or now
+            self._calib_samples.append((m.pitch_deg, m.yaw_deg))
+            if now - self._calib_start >= self.pose_calibration_sec:
+                self._pitch_offset = float(
+                    np.median([p for p, _ in self._calib_samples]))
+                self._yaw_offset = float(
+                    np.median([y for _, y in self._calib_samples]))
+                self._calib_samples.clear()
+                self.pose_calibrated = True
+        # Bản sao đã trừ offset: threshold, overlay, health feature cùng nhìn
+        # một hệ quy chiếu (đang calibration thì offset còn 0). Không mutate
+        # in-place — backend có thể dùng lại cùng object giữa các frame
+        if self._pitch_offset or self._yaw_offset:
+            m = replace(m, pitch_deg=m.pitch_deg - self._pitch_offset,
+                        yaw_deg=m.yaw_deg - self._yaw_offset)
+            result["raw"] = m
+
         # --- Mắt nhắm liên tục + PERCLOS + blink rate ---
-        closed = m.ear < EAR_CLOSED_THRESHOLD
+        # EAR/MAR chỉ đáng tin khi mặt gần chính diện: quay đầu quá
+        # EAR_VALID_YAW_DEG thì landmark mắt/miệng bị "dẹt" theo phối cảnh,
+        # mắt mở cũng đo như nhắm — frame đó coi là KHÔNG có dữ liệu mắt
+        # (không đếm vào closed/PERCLOS/blink/yawn), tránh báo buồn ngủ oan
+        # khi tài xế chỉ đang quay đầu (đường quay đầu đã có bộ đếm yaw riêng)
+        frontal = abs(m.yaw_deg) <= EAR_VALID_YAW_DEG
+        if not frontal:
+            self._eyes_closed_since = None
+            self._prev_closed = False
+            self._yawn_started = None
+        closed = frontal and m.ear < EAR_CLOSED_THRESHOLD
         if self._prev_closed and not closed:  # closed->open = 1 lần chớp
             self._blink_times.append(now)
         self._prev_closed = closed
@@ -253,7 +295,8 @@ class Tier1Analyzer:
         if self._eyes_closed_since is not None:
             result["eyes_closed_duration_sec"] = now - self._eyes_closed_since
 
-        self._ear_history.append((now, closed))
+        if frontal:
+            self._ear_history.append((now, closed))
         while self._ear_history and self._ear_history[0][0] < now - PERCLOS_WINDOW_SEC:
             self._ear_history.popleft()
         window_span = now - self._ear_history[0][0] if self._ear_history else 0.0
@@ -287,8 +330,8 @@ class Tier1Analyzer:
                 self._phone_active = False
         result["using_phone"] = self._phone_active
 
-        # --- Ngáp: MAR cao kéo dài >= 2s = 1 lần ---
-        if m.mar > MAR_YAWN_THRESHOLD:
+        # --- Ngáp: MAR cao kéo dài >= 2s = 1 lần (chỉ khi mặt chính diện) ---
+        if frontal and m.mar > MAR_YAWN_THRESHOLD:
             self._yawn_started = self._yawn_started or now
         else:
             if self._yawn_started and now - self._yawn_started >= YAWN_MIN_DURATION_SEC:
@@ -312,15 +355,21 @@ class Tier1Analyzer:
             result["immediate_alert"] = "T0_eyes_closed"
         elif result["using_phone"] or result["head_tilted_down"]:
             result["immediate_alert"] = "T1_phone_or_head_down"
-        elif result["perclos"] > perclos_threshold:
-            result["trigger_vlm_needed"] = True
-            result["trigger_reason"] = "T2_perclos_fatigue"
-        elif result["yawn_count_10min"] >= YAWN_TRIGGER_COUNT:
-            result["trigger_vlm_needed"] = True
-            result["trigger_reason"] = "T3_frequent_yawning"
-        elif result["head_turn_count_30s"] >= YAW_TRIGGER_COUNT:
-            result["trigger_vlm_needed"] = True
-            result["trigger_reason"] = "T4_repeated_head_turns"
+        else:
+            # T2-T4 có thể ĐỒNG THỜI đúng (PERCLOS là trạng thái kéo dài
+            # nhiều phút, dễ che T3/T4 nếu chỉ trả 1 reason): trả đủ danh
+            # sách theo ưu tiên, pipeline chọn reason đầu tiên chưa cooldown
+            reasons = []
+            if result["perclos"] > perclos_threshold:
+                reasons.append("T2_perclos_fatigue")
+            if result["yawn_count_10min"] >= YAWN_TRIGGER_COUNT:
+                reasons.append("T3_frequent_yawning")
+            if result["head_turn_count_30s"] >= YAW_TRIGGER_COUNT:
+                reasons.append("T4_repeated_head_turns")
+            if reasons:
+                result["trigger_vlm_needed"] = True
+                result["trigger_reason"] = reasons[0]
+            result["trigger_reasons"] = reasons
 
         self.last_result = result  # cho overlay/debug đọc, khỏi extract lại
         return result
