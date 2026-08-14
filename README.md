@@ -43,6 +43,43 @@ Chạy Tier 1 thật trên webcam/video:
 .venv/bin/python -m src.run_video --input clip.mp4 --db-path :memory:
 ```
 
+## Thử với video của bạn
+
+Sau khi cài `requirements-demo.txt` và chạy `./scripts/setup_models.sh tier1`
+như ở trên, truyền đường dẫn video vào `--input`. Nên nhìn thẳng trong khoảng
+5 giây đầu để pipeline hiệu chỉnh góc đặt camera.
+
+Chạy MediaPipe và YOLO thật, đồng thời xuất video có overlay EAR, MAR,
+PERCLOS, pitch/yaw và khung cảnh báo:
+
+```bash
+.venv/bin/python -m src.run_video \
+  --input "/duong-dan/video-cua-ban.mp4" \
+  --output result.mp4 \
+  --db-path :memory:
+```
+
+`result.mp4` được ghi tại thư mục hiện tại. Console cũng in thời điểm và nội
+dung từng cảnh báo. `--db-path :memory:` giúp lần thử không lưu health
+baseline xuống máy.
+
+Để ghép các WAV cảnh báo đã duyệt vào audio track của video kết quả, cài
+`ffmpeg` và thêm `--audio-mux`:
+
+```bash
+ffmpeg -version
+.venv/bin/python -m src.run_video \
+  --input "/duong-dan/video-cua-ban.mp4" \
+  --output result-with-audio.mp4 \
+  --audio-mux \
+  --db-path :memory:
+```
+
+Runner cũng nhận một thư mục ảnh bằng `--input /duong-dan/frames/ --fps 10`.
+Nếu đã khởi động llama-server theo phần Tier 2 bên dưới, thêm
+`--vlm-url http://127.0.0.1:8090` để dùng VLM thật; nếu không, Tier 1 vẫn chạy
+đầy đủ và Tier 2 tự dùng mock.
+
 Đánh giá lại FL3D:
 
 ```bash
