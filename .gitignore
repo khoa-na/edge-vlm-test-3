@@ -7,3 +7,4 @@ venv/
 *.pt
 .env
 demo_output.mp4
+models/tts/

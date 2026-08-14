@@ -6,5 +6,12 @@ pytest
 # mediapipe
 # opencv-python
 
+# Tùy chọn — phone detection thật (YOLO26n, kéo theo torch CPU)
+# ultralytics
+
+# Tùy chọn — cảnh báo TTS tiếng Việt offline
+# piper-tts        # pre-render (build-time)
+# sounddevice      # phát WAV (runtime; cần libportaudio2 của hệ thống)
+
 # Tùy chọn — chạy thật Tier 2 với model GGUF
 # llama-cpp-python

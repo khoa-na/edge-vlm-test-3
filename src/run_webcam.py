@@ -9,8 +9,10 @@ import argparse
 import time
 
 try:
+    from .audio_alerts import try_create_speaker
     from .pipeline import SafetyAndHealthMonitorPipeline, delivery_channel
 except ImportError:
+    from audio_alerts import try_create_speaker
     from pipeline import SafetyAndHealthMonitorPipeline, delivery_channel
 
 
@@ -23,7 +25,14 @@ def main():
     ap.add_argument("--vlm-url", default=None,
                     help="URL llama-server (vd http://127.0.0.1:8090) — Tier 2 thật")
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--audio", action="store_true",
+                    help="phát cảnh báo TTS tiếng Việt (cần assets/tts/, "
+                         "chạy src.tts_prerender trước)")
     args = ap.parse_args()
+
+    speaker = try_create_speaker() if args.audio else None
+    if args.audio and speaker is None:
+        print("Audio không khả dụng (thiếu assets/tts hoặc sounddevice) — chạy tiếp không tiếng")
 
     monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
                                              vlm_server_url=args.vlm_url)
@@ -51,6 +60,8 @@ def main():
             # là công cụ dev để quan sát
             channel = delivery_channel(telematics)
             print(f"🔊 [{channel}] {alert}")
+            if speaker:
+                speaker.play(alert)
 
         cv2.putText(frame_bgr, last_alert[:60], (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

@@ -359,3 +359,80 @@ def test_delivery_channel_policy():
     assert delivery_channel({"speed_kmh": 60}) == "audio_short"
     assert delivery_channel({"speed_kmh": 10}) == "audio_full"
     assert delivery_channel({"speed_kmh": 0}) == "audio_and_screen"
+
+
+# ----------------------------------------------------------------------
+# Object detector (YOLO26n) + TTS audio alerts — giai đoạn 1 roadmap
+# ----------------------------------------------------------------------
+def test_phone_detector_stride_caches_confidence():
+    """YOLO chỉ chạy mỗi N frame; frame giữa dùng lại conf gần nhất."""
+    from object_detector import Yolo26PhoneDetector
+
+    det = Yolo26PhoneDetector.__new__(Yolo26PhoneDetector)  # bỏ qua load model
+    det.stride, det._frame_idx, det._last_conf = 3, 0, 0.0
+    det.imgsz, det.conf, det.device = 384, 0.25, "cpu"
+    calls = []
+
+    class FakeBoxes(list):
+        @property
+        def conf(self):
+            import numpy as _np
+            return _np.array([0.8])
+
+    class FakeResult:
+        boxes = FakeBoxes([1])
+
+    class FakeModel:
+        def predict(self, *a, **k):
+            calls.append(1)
+            return [FakeResult()]
+
+    det.model = FakeModel()
+    confs = [det(FRAME) for _ in range(6)]
+    assert len(calls) == 2                      # chạy frame 0 và 3
+    assert confs == [0.8] * 6                   # frame giữa dùng cache
+
+
+def test_phone_detector_fallback_none_on_missing_weights():
+    from object_detector import try_create_phone_detector
+    assert try_create_phone_detector("nonexistent/path.pt") is None
+
+
+def test_pipeline_mock_backend_never_gets_auto_yolo():
+    """Kịch bản mock điều khiển phone qua phone_conf backend — YOLO không
+    được auto-cắm đè lên (chỉ bật khi Tier 1 là backend thật)."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    assert p.tier1.phone_detector is None
+
+
+def test_tts_manifest_covers_every_approved_sentence():
+    """Mọi câu trong tập đóng duyệt sẵn phải có WAV pre-render — thêm câu
+    mới mà quên chạy src.tts_prerender là test này đỏ."""
+    import json
+    from pipeline import IMMEDIATE_ALERTS, PRE_RIDE_REMINDERS
+    from guardrails import CONFIG_PATH
+
+    tts_dir = Path(__file__).parent.parent / "assets" / "tts"
+    manifest = json.loads((tts_dir / "manifest.json").read_text(encoding="utf-8"))
+    cfg = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    sentences = (set(IMMEDIATE_ALERTS.values()) | set(PRE_RIDE_REMINDERS.values())
+                 | set(cfg["fallback_templates"].values())
+                 | {t for t in cfg["template_bank"].values() if t})
+    for text in sentences:
+        assert text in manifest, f"thiếu TTS cho: {text}"
+        assert (tts_dir / manifest[text]).exists()
+
+
+def test_speaker_rejects_free_text():
+    """AlertSpeaker chỉ phát câu thuộc manifest — text lạ (free text) bị bỏ,
+    không synthesize runtime (docs/02)."""
+    import audio_alerts
+
+    sp = audio_alerts.AlertSpeaker.__new__(audio_alerts.AlertSpeaker)
+    sp.manifest = {"câu duyệt sẵn": "x.wav"}
+    sp._thread = None
+    sp.tts_dir = Path("/nonexistent")
+    assert sp.play("text model tự bịa ra") is False
+    assert sp.play(None) is False
+    assert sp.play("") is False

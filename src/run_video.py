@@ -15,8 +15,10 @@ from pathlib import Path
 import numpy as np
 
 try:
+    from .audio_alerts import try_create_speaker
     from .pipeline import SafetyAndHealthMonitorPipeline
 except ImportError:
+    from audio_alerts import try_create_speaker
     from pipeline import SafetyAndHealthMonitorPipeline
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -71,9 +73,15 @@ def main():
                     help="đường dẫn mp4 xuất video annotate (EAR/MAR/pose + cảnh báo)")
     ap.add_argument("--driving-min", type=float, default=30,
                     help="continuous_driving_min giả lập cho telematics")
+    ap.add_argument("--audio", action="store_true",
+                    help="phát cảnh báo TTS tiếng Việt khi chạy (cần assets/tts/)")
     args = ap.parse_args()
 
     import cv2
+
+    speaker = try_create_speaker() if args.audio else None
+    if args.audio and speaker is None:
+        print("Audio không khả dụng (thiếu assets/tts hoặc sounddevice) — chạy tiếp không tiếng")
 
     monitor = SafetyAndHealthMonitorPipeline(edge_vlm_path=args.vlm,
                                              vlm_server_url=args.vlm_url)
@@ -90,6 +98,8 @@ def main():
         if alert and alert != last:
             n_alerts += 1
             print(f"[t={ts:7.2f}s | {name}] 🔊 {alert}")
+            if speaker:
+                speaker.play(alert)
         if alert:
             alert_banner, banner_until = alert, ts + 2.0  # giữ banner 2s
         last = alert
