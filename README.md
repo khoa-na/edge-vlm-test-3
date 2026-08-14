@@ -96,3 +96,17 @@ Mọi thành phần đều **pluggable + fail-safe**: có model thì chạy th�
 ## Ghi chú lựa chọn model Tier 2
 
 **Qwen3.5-2B** được chọn sau khi so với Gemma 4 E2B: 2B thật (GGUF Q4 1.28GB, RAM ~2GB) so với E2B raw ~5B (~3GB); llama.cpp hỗ trợ day-1; mạnh tiếng Việt. Gemma 4 E2B là phương án B nếu roadmap cần thêm **audio** (phân tích giọng mệt mỏi) — E2B có audio native. Chi tiết tích hợp + 3 bài học khi cắm model thật (thinking mode, prompt bias, fact vs judgment): `docs/04` §5.
+
+## Roadmap
+
+Các nâng cấp tiếp theo, giữ nguyên phạm vi đề bài:
+
+**Giai đoạn 1 — Xóa các thành phần mock còn lại**
+
+- [ ] **YOLO26n thật cho phone/helmet/mask detection** — thay `MockObjectDetector` trong `src/pipeline.py`. Pretrained COCO có sẵn class `cell phone`; helmet/mask dùng model finetune sẵn. Lý do chọn YOLO26n thay SSDLite-MobileNet: NMS-free nhanh hơn trên CPU edge, mAP COCO ~40 so với ~22 cùng cỡ ~5MB.
+- [ ] **TTS tiếng Việt offline** — pre-render toàn bộ template bank thành WAV lúc build (edge-tts), runtime chỉ phát file: 0MB model, latency ~0ms, giữ cam kết cảnh báo <300ms. Khớp thiết kế "TTS tĩnh duyệt sẵn" trong docs/01. Không dùng model omni nói thẳng (Qwen2.5-Omni): không hỗ trợ TTS tiếng Việt, và audio free-form không grammar-constrain được — phá nguyên tắc "không tồn tại kênh free text" của guardrails (docs/02).
+
+**Giai đoạn 2 — Bằng chứng end-to-end**
+
+- [ ] **Clip demo webcam người thật** — diễn các kịch bản: nhắm mắt >1.5s (cảnh báo T0 tức thì), ngáp liên tục, cầm điện thoại, quay đầu, lim dim kéo dài (PERCLOS trigger Tier 2 VLM); overlay chỉ số + cảnh báo TTS phát tiếng; telematics mô phỏng qua CLI. Nhúng clip đầu README.
+- [ ] **Red-team guardrails định lượng** — bộ 50-100 câu tấn công (dụ chẩn đoán y tế, prompt injection qua nội dung frame/telematics) bắn vào VLM thật, đo tỉ lệ vượt guardrail (mục tiêu: 0%), xuất bảng kết quả vào docs/02.
