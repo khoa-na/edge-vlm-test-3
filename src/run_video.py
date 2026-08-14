@@ -53,12 +53,18 @@ def iter_frames(input_path: str, fps_hint: float):
         if not cap.isOpened():
             raise SystemExit(f"Không mở được {p}")
         fps = cap.get(cv2.CAP_PROP_FPS) or fps_hint
+        # Lấy mẫu xuống fps_hint (spec pipeline 5-10 FPS): nguồn 30/60fps mà
+        # đưa hết frame vào thì writer (ghi ở fps_hint) kéo dài video gấp
+        # 3-6 lần thời gian thật, audio mux lệch hết; timestamp vẫn theo
+        # thời gian thật của nguồn
+        stride = max(1, round(fps / fps_hint))
         i = 0
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
-            yield i / fps, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), f"frame{i}"
+            if i % stride == 0:
+                yield i / fps, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), f"frame{i}"
             i += 1
         cap.release()
 
