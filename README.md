@@ -2,6 +2,25 @@
 
 Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3**. Pipeline mock đáp ứng đầy đủ luồng bắt buộc của đề. Ngoài phần đó, repo còn có bản chạy với MediaPipe, YOLO và Qwen3.5-2B, kết quả đánh giá trên FL3D cùng một video webcam tự quay.
 
+## Dành cho người chấm
+
+Bài làm được chia rõ thành hai phạm vi. Phần bắt buộc bám theo [đề bài gốc](<assets/BÀI KIỂM TRA NĂNG LỰC EDGE VLM & MULTIMODAL AI - SỐ 3.md>) và có thể chạy hoàn toàn bằng mock, không cần tải model. Phần làm thêm thay mock bằng MediaPipe, YOLO26n và Qwen3.5-2B để kiểm tra kiến trúc trên dữ liệu thật; đây không phải điều kiện để chạy bộ test bắt buộc.
+
+Nếu chỉ có khoảng 5–10 phút để xem repo, có thể kiểm tra theo thứ tự sau:
+
+1. Chạy `./scripts/smoke_test.sh` để kiểm tra unit test, demo mock và red-team mặc định.
+2. Chạy `.venv/bin/python -m src.demo` để xem đủ các kịch bản của đề mà không cần model.
+3. Xem [demo_webcam.mp4](demo_webcam.mp4), đặc biệt các mốc được liệt kê ở mục [Demo webcam — mốc xem nhanh](#demo-webcam--mốc-xem-nhanh).
+4. Đọc [giải trình kiến trúc](docs/05-giai-trinh.md) và [kết quả đánh giá](docs/04-evaluation.md) để xem cách đo, giả định và giới hạn của số liệu.
+
+Một số điểm quan trọng để đọc đúng phạm vi bài làm:
+
+- Tier 1 phát hiện sự kiện bằng CV và luật theo thời gian. Cảnh báo khẩn cấp không chờ VLM.
+- Tier 2 VLM chỉ tổng hợp ngữ cảnh thành `observation` và `severity`; câu nói cuối cùng được chọn từ template đã duyệt và đi qua guardrail tất định.
+- FL3D được dùng để đánh giá buồn ngủ. Phone detection mới được minh họa trên video tự quay, chưa có bộ cabin-phone có nhãn đủ lớn để đưa ra claim tổng quát.
+- Health baseline là prototype bảo vệ quyền riêng tư, không phải chức năng chẩn đoán y tế.
+- Pre-ride đã có interface và mock theo đề, nhưng weights thật cho quai mũ, khẩu trang và kính chưa được train trong repo.
+
 ## Tóm tắt bài làm
 
 | Phạm vi | Trạng thái | Bằng chứng |
