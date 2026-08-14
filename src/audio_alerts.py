@@ -42,18 +42,24 @@ class AlertSpeaker:
         import sounddevice  # ImportError -> caller quyết định tắt audio
         self._sd = sounddevice
         self._thread: Optional[threading.Thread] = None
+        self._current_text: Optional[str] = None
         self._play_lock = threading.Lock()
 
     def play(self, text: Optional[str]) -> bool:
         if not text:
             return False
-        path = self.manifest.get(text.strip())
+        clean_text = text.strip()
+        path = self.manifest.get(clean_text)
         if path is None:
             return False
 
-        critical = text.strip().startswith("CẢNH BÁO:")
+        critical = clean_text.startswith("CẢNH BÁO:")
         with self._play_lock:
             if self._thread is not None and self._thread.is_alive():
+                # Pipeline trả T0/T1 ở mọi frame. Không được để cùng một câu
+                # khẩn cấp tự stop rồi restart 5-10 lần/giây.
+                if getattr(self, "_current_text", None) == clean_text:
+                    return False
                 if not critical:
                     return False
                 # sounddevice.stop() giải phóng lệnh play(blocking=True) đang
@@ -66,12 +72,22 @@ class AlertSpeaker:
                     pass
 
             def worker():
-                with wave.open(str(path), "rb") as wf:
-                    rate = wf.getframerate()
-                    data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-                self._sd.play(data, rate, blocking=True)
+                try:
+                    with wave.open(str(path), "rb") as wf:
+                        rate = wf.getframerate()
+                        data = np.frombuffer(
+                            wf.readframes(wf.getnframes()), dtype=np.int16
+                        )
+                    self._sd.play(data, rate, blocking=True)
+                finally:
+                    # Worker cũ có thể kết thúc sau khi đã bị preempt. Chỉ
+                    # clear nếu nó vẫn là worker hiện hành.
+                    with self._play_lock:
+                        if self._thread is threading.current_thread():
+                            self._current_text = None
 
             self._thread = threading.Thread(target=worker, daemon=True)
+            self._current_text = clean_text
             self._thread.start()
         return True
 

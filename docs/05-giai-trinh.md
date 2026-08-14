@@ -70,12 +70,15 @@ chỉ so sánh trong điều kiện sáng tương đương.
 
 Các phiên trong ngày được gộp bằng median, rồi baseline lấy mean và độ lệch
 chuẩn từ tối đa 7 ngày hợp lệ gần nhất. Dữ liệu nằm trong SQLite cục bộ và
-gắn với `profile_id` do người dùng chọn, không dùng face embedding. Hệ thống
-cảnh báo khi hai feature cùng lệch theo hướng cần chú ý với |z| > 2, hoặc một
-feature có |z| > 3 trong hai phiên liên tiếp. Ngày đã bị cảnh báo được loại
-khỏi baseline để trạng thái bất thường không dần bị học thành bình thường.
-Nếu cần gọi VLM, model chỉ nhận phần chênh lệch dạng text và frame hiện tại;
-không có ảnh lịch sử để gửi.
+gắn với `profile_id` do người dùng chọn, không dùng face embedding. Frame quá
+tối bị bỏ; điều kiện sáng lấy từ sensor hoặc ước lượng thành `light_bucket`.
+Feature temporal chưa đủ cửa sổ được lưu `NULL`. Hệ thống cảnh báo khi hai
+feature cùng lệch theo hướng cần chú ý với |z| > 2, hoặc một feature có |z| >
+3 trong hai phiên liên tiếp; noise floor theo từng feature tránh z-score tăng
+vọt khi baseline có độ lệch chuẩn bằng 0. Ngày đã bị cảnh báo được loại khỏi
+baseline để trạng thái bất thường không dần bị học thành bình thường. Nếu cần
+gọi VLM, model chỉ nhận phần chênh lệch dạng text và frame hiện tại; không có
+ảnh lịch sử để gửi.
 
 Prototype đã có retention 14 ngày cho sample, dữ liệu tổng hợp và cờ anomaly.
 SQLite hiện chưa mã hóa, và repo cũng chưa có màn hình opt-in hay chức năng

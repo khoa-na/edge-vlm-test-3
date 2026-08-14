@@ -98,7 +98,12 @@ class MediaPipeLandmarkBackend:
                 raise ImportError(f"face_landmarker model not found: {path}")
         self._mp = mp
         self._mesh = FaceLandmarker.create_from_options(FaceLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=path), num_faces=1))
+            base_options=BaseOptions(model_asset_path=path),
+            num_faces=1,
+            min_face_detection_confidence=0.7,
+            min_face_presence_confidence=0.7,
+            min_tracking_confidence=0.7,
+        ))
 
     @staticmethod
     def _aspect_ratio(pts: np.ndarray) -> float:
@@ -220,6 +225,7 @@ class Tier1Analyzer:
         self._phone_miss_streak = 0
         self._phone_active = False
         self._last_face_ts: Optional[float] = None
+        self._first_face_ts: Optional[float] = None
 
     def analyze(self, frame: np.ndarray, now: Optional[float] = None,
                 perclos_threshold: float = PERCLOS_TRIGGER) -> Dict[str, Any]:
@@ -232,7 +238,9 @@ class Tier1Analyzer:
             "head_tilted_down": False,
             "using_phone": False,
             "perclos": 0.0,
+            "perclos_valid": False,
             "yawn_count_10min": 0,
+            "yawn_rate_valid": False,
             "head_turn_count_30s": 0,
             "blink_rate": None,
             "raw": m,
@@ -241,8 +249,32 @@ class Tier1Analyzer:
             "trigger_reasons": [],
             "immediate_alert": None,
         }
+
+        # Phone detector nhìn toàn frame và không phụ thuộc face landmark.
+        # Chạy trước nhánh no-face để vẫn bắt được điện thoại khi khuôn mặt bị
+        # che hoặc MediaPipe mất dấu.
+        phone_conf = (self.phone_detector(frame) if self.phone_detector
+                      else m.phone_conf)
+        if phone_conf > PHONE_CONF_THRESHOLD:
+            self._phone_streak += 1
+            self._phone_miss_streak = 0
+            if self._phone_streak >= PHONE_CONFIRM_FRAMES:
+                self._phone_active = True
+        else:
+            self._phone_miss_streak += 1
+            self._phone_streak = 0
+            if self._phone_miss_streak >= PHONE_RELEASE_FRAMES:
+                self._phone_active = False
+        result["using_phone"] = self._phone_active
+
         if not m.face_found:
+            if result["using_phone"]:
+                result["immediate_alert"] = "T1_phone"
+            self.last_result = result
             return result
+
+        if self._first_face_ts is None:
+            self._first_face_ts = now
 
         # Mất mặt quá FACE_GAP_RESET_SEC (che khuất, quay hẳn đi) thì reset
         # các bộ đếm thời gian — tránh cộng dồn khoảng trống thành báo động giả
@@ -305,6 +337,7 @@ class Tier1Analyzer:
         # từ vài giây đầu); blink rate cũng cần đủ 60s cửa sổ mới có nghĩa
         if window_span >= PERCLOS_MIN_WINDOW_SEC:
             result["perclos"] = sum(c for _, c in self._ear_history) / len(self._ear_history)
+            result["perclos_valid"] = True
         if window_span >= 60.0 - 1.0:
             result["blink_rate"] = float(len(self._blink_times))
 
@@ -316,21 +349,6 @@ class Tier1Analyzer:
         else:
             self._pitch_down_since = None
 
-        # --- Phone: confidence + debounce 3 frame vào / 10 frame ra ---
-        phone_conf = (self.phone_detector(frame) if self.phone_detector
-                      else m.phone_conf)
-        if phone_conf > PHONE_CONF_THRESHOLD:
-            self._phone_streak += 1
-            self._phone_miss_streak = 0
-            if self._phone_streak >= PHONE_CONFIRM_FRAMES:
-                self._phone_active = True
-        else:
-            self._phone_miss_streak += 1
-            self._phone_streak = 0
-            if self._phone_miss_streak >= PHONE_RELEASE_FRAMES:
-                self._phone_active = False
-        result["using_phone"] = self._phone_active
-
         # --- Ngáp: MAR cao kéo dài >= 2s = 1 lần (chỉ khi mặt chính diện) ---
         if frontal and m.mar > MAR_YAWN_THRESHOLD:
             self._yawn_started = self._yawn_started or now
@@ -341,6 +359,10 @@ class Tier1Analyzer:
         while self._yawn_times and self._yawn_times[0] < now - YAWN_WINDOW_SEC:
             self._yawn_times.popleft()
         result["yawn_count_10min"] = len(self._yawn_times)
+        result["yawn_rate_valid"] = (
+            self._first_face_ts is not None
+            and now - self._first_face_ts >= YAWN_WINDOW_SEC
+        )
 
         # --- Quay đầu: đếm lần vượt ngưỡng yaw (edge-triggered) ---
         turning = abs(m.yaw_deg) > YAW_TURN_THRESHOLD_DEG
@@ -354,8 +376,10 @@ class Tier1Analyzer:
         # --- Xếp loại: khẩn cấp (T0/T1) vs trigger VLM (T2-T4) ---
         if result["eyes_closed_duration_sec"] > EYES_CLOSED_ALERT_SEC:
             result["immediate_alert"] = "T0_eyes_closed"
-        elif result["using_phone"] or result["head_tilted_down"]:
-            result["immediate_alert"] = "T1_phone_or_head_down"
+        elif result["using_phone"]:
+            result["immediate_alert"] = "T1_phone"
+        elif result["head_tilted_down"]:
+            result["immediate_alert"] = "T1_head_down"
         else:
             # T2-T4 có thể ĐỒNG THỜI đúng (PERCLOS là trạng thái kéo dài
             # nhiều phút, dễ che T3/T4 nếu chỉ trả 1 reason): trả đủ danh

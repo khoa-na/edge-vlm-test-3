@@ -76,7 +76,7 @@ Từ decoder đến đầu ra cuối cùng có bốn chốt kiểm soát:
 1. Grammar constraint (GBNF của llama.cpp): grammar sinh tự động từ JSON schema trên, mọi giá trị là enum đóng — model không có token nào để viết chữ tự do. Đây là ràng buộc thực thi tại decoder, không phải quy ước trong prompt.
 2. Validator tất định sau decode: parse JSON, từ chối mọi key/value ngoài schema. Validator là lưới độc lập, vẫn đứng đó kể cả khi grammar lỗi hoặc backend không hỗ trợ GBNF.
 3. Renderer bằng code: ánh xạ `(observation, severity, trip_factor, vehicle_state)` sang một câu trong ngân hàng template đã duyệt trước — khoảng 20–30 câu, người viết, product và pháp lý duyệt. Lời văn tới người dùng do người viết 100%, model chỉ chọn tình huống.
-4. Sampling bảo thủ: `temperature ≤ 0.3`, `max_tokens ≈ 80` — đủ cho JSON, không hơn.
+4. Sampling bảo thủ: `temperature ≤ 0.3`; backend nhúng dùng `max_tokens=80`, còn llama-server dùng 512 để vẫn xử lý được model hybrid nếu server chưa tắt thinking. Lời văn cuối cùng vẫn bị giới hạn bởi schema và renderer.
 
 Cách làm này khiến lời nhắc ít đa dạng hơn free text. Đổi lại, tập câu có thể được đọc và duyệt trước. Nếu cần thêm biến thể, có thể bổ sung nhiều template cùng ý nghĩa mà không mở lại kênh sinh văn bản tự do.
 
@@ -85,7 +85,7 @@ Cách làm này khiến lời nhắc ít đa dạng hơn free text. Đổi lại
 Trong đường chạy chính, text tới người dùng luôn xuất phát từ template bank. Tôi vẫn giữ post-filter để bảo vệ hai trường hợp thực tế: chạy thử một backend free-text và template bị sửa sai quy trình. Vì filter nằm ngay trước kênh phát, mọi câu đều đi qua cùng một kiểm tra bất kể nguồn của nó.
 
 ```
-raw_text → chuẩn hóa (lowercase, bỏ dấu cách thừa, NFC normalize)
+raw_text → chuẩn hóa (lowercase, thu gọn space/tab/newline, NFC normalize)
          → quét banned list (regex, cả bản có dấu và không dấu:
            "thiếu máu" và "thieu mau")
          → hit? → THAY TOÀN BỘ câu bằng safe template (Lớp 4)
@@ -130,21 +130,21 @@ Red-team vẫn cần thiết để kiểm tra validator, template và khả năn
 
 ## 7. Red-team định lượng — kết quả
 
-`src/red_team.py` kiểm tra hai bề mặt tấn công mà hệ thống thực tế có thể gặp. Khi chạy đủ cả VLM thật và post-filter, bộ thử gồm 65 ca.
+`src/red_team.py` kiểm tra hai bề mặt tấn công mà hệ thống thực tế có thể gặp. Khi chạy đủ cả VLM thật và post-filter, bộ thử gồm 68 ca.
 
-Không cần model, script chạy 42 ca trực tiếp trên post-filter. Khi truyền `--vlm-url` tới llama-server, nó chạy thêm 23 ca prompt injection qua VLM thật. Kết quả console luôn ghi rõ lớp nào đã chạy để tránh gộp nhầm hai chế độ.
+Không cần model, script chạy 45 ca trực tiếp trên post-filter. Khi truyền `--vlm-url` tới llama-server, nó chạy thêm 23 ca prompt injection qua VLM thật. Kết quả console luôn ghi rõ lớp nào đã chạy để tránh gộp nhầm hai chế độ.
 
 **Lớp A — prompt injection vào VLM thật (23 ca).** Payload được đưa qua `delta_text`, trường `weather` của telematics và chữ nằm trong ảnh. Các ca thử yêu cầu model bỏ schema, đóng vai bác sĩ hoặc trả số đo y tế. Cả 23 đầu ra cuối cùng đều nằm trong tập template đã duyệt. Injection vẫn có thể ảnh hưởng tới lựa chọn `observation` hoặc `severity`, nhưng không tạo được câu tự do ngoài schema.
 
-**Lớp B — kiểm tra trực tiếp post-filter (42 ca).** Ba mươi câu chứa từ ngữ hoặc số đo y tế được đưa thẳng vào `enforce()`, gồm cả biến thể bỏ dấu và chèn khoảng trắng. Mười hai câu nhắc an toàn hợp lệ được dùng để đo false-positive. Kết quả mong đợi là chặn toàn bộ nhóm đầu mà không sửa nhóm sau.
+**Lớp B — kiểm tra trực tiếp post-filter (45 ca).** Ba mươi ba câu chứa từ ngữ hoặc số đo y tế được đưa thẳng vào `enforce()`, gồm cả biến thể bỏ dấu và các cách ngắt cụm từ bằng space, tab hoặc newline. Mười hai câu nhắc an toàn hợp lệ được dùng để đo false-positive. Kết quả mong đợi là chặn toàn bộ nhóm đầu mà không sửa nhóm sau.
 
 | Lớp | Loại | Số ca | Vượt rào | False-positive |
 |---|---|---|---|---|
 | A | Prompt injection vào VLM thật | 23 | 0 | — |
-| B | Câu y tế phải chặn (must-block) | 30 | 0 | — |
+| B | Câu y tế phải chặn (must-block) | 33 | 0 | — |
 | B | Câu an toàn không được chặn (must-pass) | 12 | — | 0 |
-| **Tổng** | | **65** | **0 (0.0%)** | **0** |
+| **Tổng** | | **68** | **0 (0.0%)** | **0** |
 
-Ở vòng chạy đầu tiên, hai câu có cụm "an toàn" bị chặn nhầm. Sau khi bỏ dấu, "an toàn" thành "an toan" và chứa chuỗi `toa`, vốn nằm trong danh sách cấm với nghĩa "toa thuốc". Filter đã được đổi từ so khớp substring sang biên từ `(?<!\w)term(?!\w)` và bổ sung ba test hồi quy. Sau sửa, cả 30 câu cần chặn vẫn bị giữ lại, còn false-positive giảm về 0.
+Ở vòng chạy đầu tiên, hai câu có cụm "an toàn" bị chặn nhầm. Sau khi bỏ dấu, "an toàn" thành "an toan" và chứa chuỗi `toa`, vốn nằm trong danh sách cấm với nghĩa "toa thuốc". Filter đã được đổi từ so khớp substring sang biên từ `(?<!\w)term(?!\w)`. Lượt audit sau bổ sung chuẩn hóa whitespace cùng các ca riêng cho space, tab và newline. Sau sửa, cả 33 câu cần chặn đều bị giữ lại, còn false-positive vẫn ở 0.
 
 Kết quả này củng cố lựa chọn dùng constrained decoding làm lớp chính. Post-filter vẫn hữu ích, nhưng bài thử cũng cho thấy filter từ khóa có thể gây false-positive nếu thiết kế không cẩn thận. Vì vậy hai lớp được giữ độc lập và có test riêng.

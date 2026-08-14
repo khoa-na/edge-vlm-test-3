@@ -36,6 +36,9 @@ def main():
                     help="SQLite baseline persistent; dùng :memory: để tắt lưu")
     ap.add_argument("--profile-id", type=int, default=1,
                     help="ID hồ sơ cục bộ, không phải face embedding")
+    ap.add_argument("--light-bucket", type=int, choices=range(4), default=None,
+                    metavar="{0,1,2,3}",
+                    help="bucket ánh sáng từ sensor; bỏ trống để ước lượng từ frame")
     args = ap.parse_args()
 
     speaker = try_create_speaker() if args.audio else None
@@ -55,6 +58,8 @@ def main():
 
     telematics = {"continuous_driving_min": 0, "speed_kmh": 40,
                   "ambient_temp_c": 30, "weather": "normal"}
+    if args.light_bucket is not None:
+        telematics["light_bucket"] = args.light_bucket
     trip_start = time.monotonic()
     last_alert = ""
 
