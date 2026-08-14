@@ -39,15 +39,32 @@ def _strip_diacritics(text: str) -> str:
     return no_marks.replace("đ", "d").replace("Đ", "D")
 
 
+def _compile_word(term: str) -> "re.Pattern":
+    """Regex khớp `term` theo biên từ: hai đầu phải là ranh giới chữ-số.
+
+    Không dùng \\b của Python vì term có thể chứa khoảng trắng (cụm nhiều
+    tiếng như "tim mạch") và ký tự Unicode; dùng lookaround trên [\\w] để
+    "toa" không khớp bên trong "toàn"/"toan", nhưng "toa " thì có.
+    """
+    esc = re.escape(term)
+    return re.compile(rf"(?<!\w){esc}(?!\w)", re.UNICODE)
+
+
 class MedicalGuardrails:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or _load_config()
         self.fallbacks = self.config["fallback_templates"]
         self.template_bank = self.config["template_bank"]
-        # Banned list quét cả bản có dấu và không dấu
+        # Banned list quét cả bản có dấu và không dấu, khớp theo BIÊN TỪ
+        # (\b) chứ không substring thô — nếu không, từ cấm ngắn như "toa"
+        # (toa thuốc) sẽ chặn nhầm "an toàn" (bỏ dấu = "an toan", chứa "toa").
+        # Biên từ dùng lookaround để đúng cả khi từ dính dấu câu.
         terms = self.config["banned_medical_terms"]
-        self._banned = [(t.lower(), _strip_diacritics(t.lower())) for t in terms]
-        self._banned_patterns = [p.lower() for p in self.config["banned_patterns"]]
+        self._banned = [(t.lower(), _compile_word(t.lower()),
+                         _compile_word(_strip_diacritics(t.lower())))
+                        for t in terms]
+        self._banned_patterns = [(p.lower(), _compile_word(p.lower()))
+                                 for p in self.config["banned_patterns"]]
         self.max_chars = self.config["max_output_chars"]
         self.audit_log: list = []
 
@@ -115,13 +132,13 @@ class MedicalGuardrails:
             normalized = unicodedata.normalize("NFC", raw_text).lower()
             stripped = _strip_diacritics(normalized)
 
-            for term, term_no_marks in self._banned:
-                if term in normalized or term_no_marks in stripped:
+            for term, rx, rx_no_marks in self._banned:
+                if rx.search(normalized) or rx_no_marks.search(stripped):
                     self._audit("banned_term", trigger_reason, detail=term)
                     return self._fallback(trigger_reason)
 
-            for pat in self._banned_patterns:
-                if pat in stripped:
+            for pat, rx in self._banned_patterns:
+                if rx.search(stripped):
                     self._audit("banned_pattern", trigger_reason, detail=pat)
                     return self._fallback(trigger_reason)
 
