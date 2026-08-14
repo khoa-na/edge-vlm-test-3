@@ -252,10 +252,12 @@ class SafetyAndHealthMonitorPipeline:
         # Câu nhắc tĩnh cũng đi qua cooldown: PERCLOS/ngáp là TRẠNG THÁI kéo
         # dài nhiều phút — không cooldown thì frame nào cũng lặp lại cùng câu
         if t1["trigger_vlm_needed"]:
-            reason = t1["trigger_reason"]
-            if self._cooldown_ok(reason, now):
-                self._start_async_vlm(frame, reason, telematics)
-                return IMMEDIATE_ALERTS.get(reason)
+            # Nhiều trigger đúng cùng lúc: lấy reason ưu tiên cao nhất còn
+            # ngoài cooldown — T2 đang cooldown không được che T3/T4
+            for reason in t1.get("trigger_reasons") or [t1["trigger_reason"]]:
+                if self._cooldown_ok(reason, now):
+                    self._start_async_vlm(frame, reason, telematics)
+                    return IMMEDIATE_ALERTS.get(reason)
 
         # 5. T5: lái liên tục > 60 phút (telematics thuần; không khẩn cấp nên
         # gọi đồng bộ được, nhưng vẫn không nằm trên safety path)

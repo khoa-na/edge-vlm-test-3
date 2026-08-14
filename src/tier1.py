@@ -237,6 +237,7 @@ class Tier1Analyzer:
             "raw": m,
             "trigger_vlm_needed": False,
             "trigger_reason": None,
+            "trigger_reasons": [],
             "immediate_alert": None,
         }
         if not m.face_found:
@@ -354,15 +355,21 @@ class Tier1Analyzer:
             result["immediate_alert"] = "T0_eyes_closed"
         elif result["using_phone"] or result["head_tilted_down"]:
             result["immediate_alert"] = "T1_phone_or_head_down"
-        elif result["perclos"] > perclos_threshold:
-            result["trigger_vlm_needed"] = True
-            result["trigger_reason"] = "T2_perclos_fatigue"
-        elif result["yawn_count_10min"] >= YAWN_TRIGGER_COUNT:
-            result["trigger_vlm_needed"] = True
-            result["trigger_reason"] = "T3_frequent_yawning"
-        elif result["head_turn_count_30s"] >= YAW_TRIGGER_COUNT:
-            result["trigger_vlm_needed"] = True
-            result["trigger_reason"] = "T4_repeated_head_turns"
+        else:
+            # T2-T4 có thể ĐỒNG THỜI đúng (PERCLOS là trạng thái kéo dài
+            # nhiều phút, dễ che T3/T4 nếu chỉ trả 1 reason): trả đủ danh
+            # sách theo ưu tiên, pipeline chọn reason đầu tiên chưa cooldown
+            reasons = []
+            if result["perclos"] > perclos_threshold:
+                reasons.append("T2_perclos_fatigue")
+            if result["yawn_count_10min"] >= YAWN_TRIGGER_COUNT:
+                reasons.append("T3_frequent_yawning")
+            if result["head_turn_count_30s"] >= YAW_TRIGGER_COUNT:
+                reasons.append("T4_repeated_head_turns")
+            if reasons:
+                result["trigger_vlm_needed"] = True
+                result["trigger_reason"] = reasons[0]
+            result["trigger_reasons"] = reasons
 
         self.last_result = result  # cho overlay/debug đọc, khỏi extract lại
         return result

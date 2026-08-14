@@ -501,3 +501,29 @@ def test_static_reminder_respects_cooldown():
             alerts.append((i / 10, out))
     perclos_alerts = [a for _, a in alerts if "buồn ngủ" in a]
     assert len(perclos_alerts) <= 1  # 40s < cooldown 180s -> tối đa 1 lần
+
+
+def test_t2_cooldown_does_not_mask_t4():
+    """T2 PERCLOS là trạng thái kéo dài nhiều phút — khi T2 đang cooldown,
+    T4 (quay đầu 3 lần/30s) vẫn phải nổ, không bị T2 che mất."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    alerts = []
+    # 0..35s: chớp mắt lim dim -> PERCLOS cao, T2 nổ 1 lần rồi vào cooldown
+    for i in range(350):
+        ear = 0.10 if i % 3 else 0.30
+        p.tier1.backend.set_scenario(ear=ear, yaw_deg=0.0)
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=i / 10)
+        if out:
+            alerts.append(out)
+    assert any("buồn ngủ" in a for a in alerts)  # T2 đã nổ
+    # 35..41s: quay đầu 3 lần (edge-triggered qua ngưỡng 45°); PERCLOS trong
+    # cửa sổ 60s vẫn cao nên T2 vẫn "đúng" nhưng đang cooldown
+    alerts.clear()
+    for i in range(60):
+        yaw = 60.0 if (i // 10) % 2 == 0 else 0.0
+        p.tier1.backend.set_scenario(ear=0.30, yaw_deg=yaw)
+        out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=35 + i / 10)
+        if out:
+            alerts.append(out)
+    assert any("quan sát phía trước" in a for a in alerts), alerts
