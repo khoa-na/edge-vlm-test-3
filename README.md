@@ -94,6 +94,8 @@ curl -sL -o models/face_landmarker.task --create-dirs \
 # 5. Cảnh báo TTS tiếng Việt (WAV pre-render sẵn trong assets/tts/)
 .venv/bin/pip install sounddevice   # + sudo apt install libportaudio2
 .venv/bin/python -m src.run_webcam --audio
+#    Xuất video demo có giọng cảnh báo baked-in (cần ffmpeg):
+.venv/bin/python -m src.run_video --input clip.mp4 --output demo.mp4 --audio-mux
 #    Re-render khi sửa template bank (cần Piper + voice 63MB, offline):
 #    pip install piper-tts && python -m src.tts_prerender
 
