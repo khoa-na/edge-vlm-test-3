@@ -40,7 +40,7 @@ IMMEDIATE_ALERTS = {
     "T0_eyes_closed": "CẢNH BÁO: Báo động! Hãy tập trung lái xe!",
     "T1_phone_or_head_down": "CẢNH BÁO: Vui lòng bỏ điện thoại xuống và nhìn đường!",
     "T2_perclos_fatigue": "Bạn có vẻ buồn ngủ, chú ý tập trung nhé.",
-    "T3_frequent_yawning": "Bạn có vẻ buồn ngủ, chú ý tập trung nhé.",
+    "T3_frequent_yawning": "Bạn ngáp hơi nhiều rồi, tấp vào nghỉ vài phút nhé.",
     "T4_repeated_head_turns": "Chú ý quan sát phía trước nhé.",
 }
 

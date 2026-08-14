@@ -307,7 +307,7 @@ def test_t2_t4_instant_alert_never_waits_for_vlm():
     start = time_mod.monotonic()
     out = p.process_stream_frame(FRAME, {"speed_kmh": 40}, now=t)
     elapsed = time_mod.monotonic() - start
-    assert out is not None and "buồn ngủ" in out   # cảnh báo tĩnh tức thời
+    assert out is not None and "ngáp" in out   # cảnh báo tĩnh tức thời (T3)
     assert elapsed < 0.15                          # không chờ VLM 300ms
     # kết quả VLM (template eyes_heavy gentle) nổi lên ở frame sau —
     # trigger còn active nên frame chưa có kết quả vẫn trả cảnh báo tĩnh

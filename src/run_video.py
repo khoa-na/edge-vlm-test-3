@@ -25,6 +25,10 @@ except ImportError:
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
+# Cùng một câu cảnh báo chỉ nhắc lại sau khi bản trước phát xong + ngần này
+# giây — chống chuỗi T0 lim dim xếp chồng chục bản giống hệt
+REPEAT_GAP = 2.0
+
 
 def iter_frames(input_path: str, fps_hint: float):
     """Yield (timestamp_sec, frame_rgb) từ video file hoặc thư mục ảnh."""
@@ -123,6 +127,7 @@ def main():
                 speaker.play(alert)
             wav = tts_manifest.get(alert.strip())
             if wav is not None:
+                dur = wav.stat().st_size / (22050 * 2)
                 # 1 slot như AlertSpeaker: câu trước chưa đọc xong thì câu
                 # thường không chèn đè (ước lượng theo kích thước WAV 22kHz);
                 # riêng câu KHẨN CẤP (T0/T1, prefix "CẢNH BÁO") không được
@@ -130,7 +135,15 @@ def main():
                 last_end = (audio_events[-1][0]
                             + audio_events[-1][1].stat().st_size / (22050 * 2)
                             if audio_events else 0.0)
-                if ts >= last_end:
+                # Dedupe câu GIỐNG HỆT: T0 khi lim dim nhấp nháy nổ hàng chục
+                # lần trong vài giây (mắt mở/nhắm xen kẽ), nếu cứ xếp hàng thì
+                # cùng một câu "Báo động!" đè nhau 6-7 bản liền. Chỉ nhắc lại
+                # sau khi bản trước phát xong + REPEAT_GAP — vẫn cảnh báo tuần
+                # hoàn khi mắt nhắm kéo dài, nhưng không chói.
+                same = [t for t, w in audio_events if w == wav]
+                if same and ts < same[-1] + dur + REPEAT_GAP:
+                    pass  # câu này vừa nhắc, chưa tới lúc lặp
+                elif ts >= last_end:
                     audio_events.append((ts, wav))
                 elif alert.startswith("CẢNH BÁO"):
                     audio_events.append((last_end, wav))
