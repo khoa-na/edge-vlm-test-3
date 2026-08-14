@@ -2,12 +2,14 @@
 
 Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3**: Real-time Driver Safety, Health Trend Detection & Ethical AI Guardrails.
 
+🎬 **Demo người thật**: [`demo_webcam.mp4`](demo_webcam.mp4) — webcam 2.5 phút diễn đủ 6 kịch bản (nhắm mắt, ngáp, điện thoại, lim dim PERCLOS, quay đầu, lái >60'), pipeline thật end-to-end (MediaPipe + YOLO26n + Qwen3.5-2B), overlay chỉ số + 10 câu cảnh báo TTS tiếng Việt ghi thẳng vào audio track. Lệnh tạo: mục [Cách chạy](#cách-chạy) bước 5.
+
 ## Kết quả nổi bật
 
 - **Chạy model thật, không chỉ thiết kế**: Tier 1 dùng MediaPipe FaceLandmarker, Tier 2 dùng **Qwen3.5-2B Q4** qua llama-server — kiểm chứng end-to-end trên frame cabin thật.
 - **Đánh giá định lượng trên dataset FL3D** (20,806 frame có nhãn): episode recall **85%** trên các đoạn ngủ gật ≥ 1.5s, false-alarm **0.65%** frame alert, kèm mục khai báo giới hạn đánh giá.
 - **Guardrails y tế kiểu "không thể vi phạm"**: VLM chỉ trả JSON enum đóng (ép grammar tại decoder), lời văn tới người dùng 100% từ template bank người viết đã duyệt — không tồn tại kênh free text.
-- **34 unit test** phủ trigger logic, guardrails, baseline, async latency, phone detector, TTS manifest; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
+- **39 unit test** phủ trigger logic, guardrails, baseline, async latency, phone detector, TTS manifest, pose calibration; 2 vòng review độc lập (Codex), sửa 19/22 finding vòng cuối.
 - **Phone detection thật (YOLO26n) + cảnh báo TTS tiếng Việt offline (Piper)**: Tier 1 đầy đủ MediaPipe + YOLO chạy ~31ms/frame CPU; mọi câu ra loa là WAV pre-render từ tập đóng duyệt sẵn — không synthesize runtime.
 
 ## Trả lời yêu cầu đề bài
@@ -65,7 +67,7 @@ src/
   run_webcam.py              Chạy với webcam
   eval_fl3d.py               Đánh giá trên dataset FL3D có nhãn
   config/guardrails_config.json   Banned list + template bank duyệt sẵn
-tests/test_pipeline.py       34 unit test
+tests/test_pipeline.py       39 unit test
 assets/tts/                  27 câu cảnh báo tiếng Việt pre-render (WAV + manifest)
 assets/                      Đề bài gốc
 ```
@@ -124,5 +126,5 @@ Các nâng cấp tiếp theo, giữ nguyên phạm vi đề bài:
 
 **Giai đoạn 2 — Bằng chứng end-to-end**
 
-- [ ] **Clip demo webcam người thật** — diễn các kịch bản: nhắm mắt >1.5s (cảnh báo T0 tức thì), ngáp liên tục, cầm điện thoại, quay đầu, lim dim kéo dài (PERCLOS trigger Tier 2 VLM); overlay chỉ số + cảnh báo TTS phát tiếng; telematics mô phỏng qua CLI. Nhúng clip đầu README.
+- [x] **Clip demo webcam người thật** — [`demo_webcam.mp4`](demo_webcam.mp4): 6/6 kịch bản nổ đúng trên clip webcam 2.5 phút (T0 nhắm mắt t=17s, T3 ngáp→VLM t=47s, T1 điện thoại t=57s, T5 lái dài→VLM t=60s, T2 PERCLOS→VLM t=70s, T4 quay đầu t=88s); overlay chỉ số + 10 câu TTS trong audio track; telematics mô phỏng qua CLI (`--driving-min 59`, cộng dồn theo thời gian clip). Quá trình lộ và sửa 3 bug thật: EAR sai phối cảnh khi quay đầu (yaw-gate 45°), câu nhắc tĩnh không cooldown, T2 PERCLOS che mất T4 trong chuỗi elif — dataset frontal (FL3D) không bao giờ lộ được các bug này.
 - [ ] **Red-team guardrails định lượng** — bộ 50-100 câu tấn công (dụ chẩn đoán y tế, prompt injection qua nội dung frame/telematics) bắn vào VLM thật, đo tỉ lệ vượt guardrail (mục tiêu: 0%), xuất bảng kết quả vào docs/02.
