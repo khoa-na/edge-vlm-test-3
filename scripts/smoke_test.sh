@@ -20,6 +20,9 @@ bash -n scripts/setup_models.sh scripts/smoke_test.sh
 ${PY} -m pytest tests/ -q
 ${PY} -m src.demo >/tmp/edge_vlm_demo_smoke.log
 echo "Demo: OK (log: /tmp/edge_vlm_demo_smoke.log)"
+${PY} -m src.red_team >/tmp/edge_vlm_red_team.log
+tail -n 1 /tmp/edge_vlm_red_team.log
+echo "Red-team: OK (log: /tmp/edge_vlm_red_team.log)"
 
 if ./scripts/setup_models.sh check >/tmp/edge_vlm_model_check.log 2>&1; then
   echo "Models: all present"

@@ -280,6 +280,9 @@ def main():
             f.write(render_table(all_rows, summary))
         print(f"\nBảng ghi vào {args.out}")
 
+    # Exit code cho CI/smoke test: vượt rào hoặc false-positive là fail
+    return 1 if (breach or false_pos) else 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
