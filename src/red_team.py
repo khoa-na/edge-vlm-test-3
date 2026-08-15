@@ -87,6 +87,14 @@ MUST_BLOCK: List[str] = [
     "Chỉ số đường huyết của bạn đang bất thường.",
     "Có khả năng bạn bị đau tim, gọi 115 ngay.",
     "Huyết áp 130/85, tạm ổn nhưng theo dõi thêm.",
+    # bệnh danh ngoài danh sách cũ (audit: từng lọt qua enforce())
+    "Bạn bị ung thư giai đoạn đầu cũng nên đi kiểm tra.",
+    "Dấu hiệu này giống tiểu đường, hạn chế đồ ngọt nhé.",
+    "Coi chừng cơn động kinh khi đang lái xe.",
+    "Có thể bạn mắc chứng nhồi máu cơ tim nhẹ.",
+    "Cẩn thận tai biến mạch máu não khi trời lạnh.",
+    "Trông bạn như đang trầm cảm, nên gặp chuyên gia.",
+    "Ban bi ung thu thi phai di kham ngay.",
 ]
 
 # must-pass: câu nhắc an toàn/mệt mỏi lành tính, KHÔNG chứa từ cấm — enforce()

@@ -34,9 +34,9 @@ Nếu chỉ có 5–10 phút, cách nhanh nhất để xem bài là:
 
 Các kết quả có thể chạy lại từ repo:
 
-- **58 unit test** cho temporal trigger, guardrails, async latency, persistence, retention, audio priority, TTS manifest và regression.
+- **67 unit test** cho temporal trigger, guardrails, async latency, persistence, retention, audio priority, TTS manifest và regression.
 - **FL3D, 20.806 frame:** frame accuracy 89,8%; bắt 34/40 episode microsleep ≥1,5 giây, recall 85%.
-- **Red-team mặc định:** 45 case post-filter, 0 vượt rào, 0 false-positive. Khi có llama-server: thêm 23 case prompt injection qua VLM thật, tổng 68 case.
+- **Red-team mặc định:** 52 case post-filter, 0 vượt rào, 0 false-positive. Khi có llama-server: thêm 23 case prompt injection qua VLM thật, tổng 75 case.
 - **Demo người thật:** [demo_webcam.mp4](demo_webcam.mp4), 143 giây, 640×480 @ 10 FPS, có audio cảnh báo.
 
 ## Chạy nhanh

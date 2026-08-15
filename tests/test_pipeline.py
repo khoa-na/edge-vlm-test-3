@@ -818,3 +818,96 @@ def test_banned_term_word_boundary_not_substring():
     # nhưng KHÔNG chặn 'an toàn' / 'toàn bộ' chứa chuỗi con 'toa'
     assert g.enforce("Lái xe an toàn nhé.", "x") == "Lái xe an toàn nhé."
     assert g.enforce("Chú ý toàn bộ mặt đường.", "x") == "Chú ý toàn bộ mặt đường."
+
+
+# ----------------------------------------------------------------------
+# Regression — các fix sau vòng audit ngoài (2026-08)
+# ----------------------------------------------------------------------
+def test_tier1_init_falls_back_on_any_backend_exception(monkeypatch):
+    """MediaPipe có thể fail lúc init vì lý do môi trường (vd PortAudioError,
+    không phải ImportError) — pipeline vẫn phải lên được với mock backend."""
+    import pipeline as pl
+
+    class ExplodingBackend:
+        def __init__(self):
+            raise RuntimeError("PortAudioError: no audio device")
+
+    monkeypatch.setattr(pl, "MediaPipeLandmarkBackend", ExplodingBackend)
+    p = pl.SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf")
+    assert isinstance(p.tier1.backend, MockLandmarkBackend)
+
+
+def test_t7_worker_busy_keeps_cooldown_unburned():
+    """Slot VLM bận lúc có anomaly T7: event bị bỏ nhưng KHÔNG được đốt
+    cooldown — chu kỳ định kỳ sau phải nhắc được."""
+    import threading
+
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    p.tier1.backend.set_scenario(ear=0.30)
+    p._extract_health_features = lambda *a, **k: {
+        "eye_openness": 0.2, "perclos": 0.3, "yawn_rate": 2.0,
+        "blink_rate": 24.0, "eye_darkness": 0.8,
+    }
+    p.baseline.check_anomaly = lambda *a, **k: {
+        "is_anomaly": True, "is_provisional": False,
+        "delta_text": "eye_openness lệch 2.5 sigma theo hướng xấu",
+    }
+    release = threading.Event()
+    p._vlm_thread = threading.Thread(target=release.wait, daemon=True)
+    p._vlm_thread.start()
+
+    out = p.process_stream_frame(HEALTH_FRAME, {"speed_kmh": 45}, now=300.0)
+    assert out is None
+    assert "T7_baseline_anomaly" not in p._last_vlm_ts  # cooldown còn nguyên
+
+    release.set()
+    p._vlm_thread.join(timeout=1.0)
+    out2 = p.process_stream_frame(HEALTH_FRAME, {"speed_kmh": 45}, now=600.0)
+    assert out2 == p.guardrails.fallbacks["fatigue"]
+    assert p._last_vlm_ts["T7_baseline_anomaly"] == 600.0
+
+
+def test_phone_streak_ignores_cached_stride_frames():
+    """PHONE_CONFIRM_FRAMES phải là 3 lần inference ĐỘC LẬP cùng thấy phone:
+    1 inference dương + 2 frame cache (fresh=False) không được kích hoạt."""
+    backend = MockLandmarkBackend()
+
+    class StrideDet:
+        def __init__(self):
+            self.fresh = True
+            self.calls = 0
+
+        def __call__(self, frame):
+            self.calls += 1
+            self.fresh = (self.calls - 1) % 3 == 0  # inference thật mỗi 3 frame
+            return 0.9
+
+    analyzer = Tier1Analyzer(backend=backend, phone_detector=StrideDet())
+    backend.set_scenario(ear=0.3)
+    outs = [analyzer.analyze(FRAME, now=i / 10) for i in range(3)]
+    assert not outs[-1]["using_phone"]  # mới 1 inference thật, chưa xác nhận
+    outs = [analyzer.analyze(FRAME, now=(3 + i) / 10) for i in range(6)]
+    assert outs[-1]["using_phone"]  # đủ 3 inference độc lập
+
+
+def test_pre_ride_check_no_frames_fail_closed():
+    """Không có frame = không xác minh được = nhắc đủ mục áp dụng,
+    không lặng lẽ trả rỗng (fail-open)."""
+    p = SafetyAndHealthMonitorPipeline(edge_vlm_path="none.gguf",
+                                       tier1_backend=MockLandmarkBackend())
+    normal = p.pre_ride_check([], {"weather": "normal"})
+    assert any("mũ bảo hiểm" in r for r in normal)
+    dusty = p.pre_ride_check([], {"weather": "sunny_dusty"})
+    assert len(dusty) == 3  # mũ + khẩu trang + kính
+
+
+@pytest.mark.parametrize("text", [
+    "Bạn bị ung thư đấy, đi kiểm tra sớm nhé.",
+    "Dấu hiệu này giống tiểu đường.",
+    "Coi chừng cơn động kinh khi đang lái xe.",
+    "Có thể bạn mắc chứng nhồi máu cơ tim nhẹ.",
+    "Ban bi ung thu roi.",  # bỏ dấu
+])
+def test_expanded_disease_names_blocked(guard, text):
+    assert guard.enforce(text, "x") in set(guard.fallbacks.values())

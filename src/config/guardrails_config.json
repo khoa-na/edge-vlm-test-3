@@ -4,7 +4,10 @@
     "suy nhược", "viêm", "nhiễm trùng", "sốt", "huyết áp",
     "tim mạch", "tụt đường huyết", "đường huyết", "thiếu sắt",
     "suy tim", "đau tim", "co giật", "hạ canxi", "rối loạn",
-    "khám", "bác sĩ kê", "thuốc", "toa", "điều trị", "hội chứng"
+    "khám", "bác sĩ kê", "thuốc", "toa", "điều trị", "hội chứng",
+    "ung thư", "tiểu đường", "động kinh", "nhồi máu", "tai biến",
+    "trầm cảm", "suy thận", "suy gan", "hen suyễn", "cấp cứu",
+    "bạn bị", "bạn mắc", "đột quị"
   ],
   "banned_patterns": ["mmhg", "bpm", "spo2", "mg/dl", "mmol"],
   "max_output_chars": 200,

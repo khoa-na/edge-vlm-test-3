@@ -125,9 +125,11 @@ class SafetyAndHealthMonitorPipeline:
                 tier1_backend = MediaPipeLandmarkBackend()
                 real_tier1 = True
                 print("Tier 1: MediaPipe FaceLandmarker (real)")
-            except ImportError:
+            except Exception as e:
+                # Không chỉ ImportError: mediapipe có thể fail lúc init vì lý do
+                # môi trường (vd PortAudioError) — mọi lỗi đều fallback mock
                 tier1_backend = MockLandmarkBackend()
-                print("Tier 1: mock landmark backend (mediapipe not installed)")
+                print(f"Tier 1: mock landmark backend (mediapipe unavailable: {e})")
         # YOLO26n chỉ auto-bật khi Tier 1 chạy backend thật: kịch bản mock/test
         # điều khiển phone qua phone_conf của backend, không để YOLO đè lên
         if phone_detector is None and real_tier1:
@@ -308,6 +310,14 @@ class SafetyAndHealthMonitorPipeline:
         khẩu trang/kính chỉ nhắc khi trời nắng bụi. Lấy đa số phiếu trên
         nhiều frame (docs/01 §2.3) — không kết luận từ 1 frame mờ.
         """
+        # Fail-closed: không có frame = không xác minh được = nhắc đủ các
+        # mục áp dụng, không lặng lẽ coi như đạt.
+        if not frames:
+            reminders = [PRE_RIDE_REMINDERS["helmet_strap"]]
+            if telematics.get("weather") == "sunny_dusty":
+                reminders += [PRE_RIDE_REMINDERS["mask"],
+                              PRE_RIDE_REMINDERS["sunglasses"]]
+            return reminders
         votes: Dict[str, int] = {"helmet_strap": 0, "mask": 0, "sunglasses": 0}
         for frame in frames:
             det = self.object_detector.detect(frame)
@@ -354,7 +364,8 @@ class SafetyAndHealthMonitorPipeline:
         self.baseline.add_sample(self.profile_id, int(time.time()),
                                  light_bucket, features)
         verdict = self.baseline.check_anomaly(self.profile_id, light_bucket, features)
-        if verdict["is_anomaly"] and self._cooldown_ok("T7_baseline_anomaly", now):
+        if verdict["is_anomaly"] and self._cooldown_ok(
+                "T7_baseline_anomaly", now, record=False):
             anomaly_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             self.baseline.mark_day_anomalous(self.profile_id, anomaly_day)
             # Baseline provisional (< 7 ngày dữ liệu): chỉ cho nhắc mức nhẹ nhất
@@ -364,8 +375,10 @@ class SafetyAndHealthMonitorPipeline:
                 delta_text=verdict["delta_text"], max_severity=cap)
             # Một quan sát baseline không phải cảnh báo khẩn cấp. Nếu worker
             # nhận job, nhắc nhẹ bằng câu đã duyệt ngay; kết quả có ngữ cảnh
-            # của VLM sẽ nổi lên ở frame sau. Nếu slot đang bận thì im lặng.
+            # của VLM sẽ nổi lên ở frame sau. Nếu slot đang bận thì im lặng
+            # và KHÔNG ghi cooldown — chu kỳ 5 phút sau được thử lại.
             if started:
+                self._last_vlm_ts["T7_baseline_anomaly"] = now
                 return self.guardrails.fallbacks["fatigue"]
         return None
 
@@ -411,11 +424,16 @@ class SafetyAndHealthMonitorPipeline:
             "lip_color_index": getattr(raw, "lip_color_index", None),
         }
 
-    def _cooldown_ok(self, reason: str, now: float) -> bool:
+    def _cooldown_ok(self, reason: str, now: float,
+                     record: bool = True) -> bool:
+        """record=False: chỉ kiểm tra, không ghi timestamp — dùng khi việc
+        phát nhắc còn phụ thuộc điều kiện khác (vd worker VLM có nhận job
+        không); nếu không, event bị bỏ vẫn đốt nguyên cooldown."""
         last = self._last_vlm_ts.get(reason)
         if last is not None and now - last < VLM_COOLDOWN_SEC:
             return False
-        self._last_vlm_ts[reason] = now
+        if record:
+            self._last_vlm_ts[reason] = now
         return True
 
 

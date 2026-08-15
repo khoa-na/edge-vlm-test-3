@@ -40,11 +40,16 @@ class Yolo26PhoneDetector:
         self.stride = max(1, stride)
         self._frame_idx = 0
         self._last_conf = 0.0
+        # True khi lần gọi gần nhất chạy inference thật, False khi trả cache
+        # stride — Tier1Analyzer chỉ tăng streak xác nhận trên inference mới
+        self.fresh = True
 
     def __call__(self, frame: np.ndarray) -> float:
         self._frame_idx += 1
         if (self._frame_idx - 1) % self.stride:
+            self.fresh = False
             return self._last_conf
+        self.fresh = True
         # pipeline đưa frame RGB (quy ước MediaPipe); ultralytics coi ndarray
         # là BGR nên đảo kênh trước khi predict
         results = self.model.predict(frame[..., ::-1], imgsz=self.imgsz,

@@ -255,16 +255,23 @@ class Tier1Analyzer:
         # che hoặc MediaPipe mất dấu.
         phone_conf = (self.phone_detector(frame) if self.phone_detector
                       else m.phone_conf)
-        if phone_conf > PHONE_CONF_THRESHOLD:
-            self._phone_streak += 1
-            self._phone_miss_streak = 0
-            if self._phone_streak >= PHONE_CONFIRM_FRAMES:
-                self._phone_active = True
-        else:
-            self._phone_miss_streak += 1
-            self._phone_streak = 0
-            if self._phone_miss_streak >= PHONE_RELEASE_FRAMES:
-                self._phone_active = False
+        # Detector chạy stride có thể trả confidence cache (fresh=False):
+        # không tăng streak trên frame cache — PHONE_CONFIRM_FRAMES phải là
+        # số lần inference ĐỘC LẬP cùng thấy phone, không phải 1 detection
+        # được đếm lặp 3 lần.
+        phone_fresh = getattr(self.phone_detector, "fresh", True) \
+            if self.phone_detector else True
+        if phone_fresh:
+            if phone_conf > PHONE_CONF_THRESHOLD:
+                self._phone_streak += 1
+                self._phone_miss_streak = 0
+                if self._phone_streak >= PHONE_CONFIRM_FRAMES:
+                    self._phone_active = True
+            else:
+                self._phone_miss_streak += 1
+                self._phone_streak = 0
+                if self._phone_miss_streak >= PHONE_RELEASE_FRAMES:
+                    self._phone_active = False
         result["using_phone"] = self._phone_active
 
         if not m.face_found:

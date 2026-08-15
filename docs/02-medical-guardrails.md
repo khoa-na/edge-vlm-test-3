@@ -130,21 +130,23 @@ Red-team vẫn cần thiết để kiểm tra validator, template và khả năn
 
 ## 7. Red-team định lượng — kết quả
 
-`src/red_team.py` kiểm tra hai bề mặt tấn công mà hệ thống thực tế có thể gặp. Khi chạy đủ cả VLM thật và post-filter, bộ thử gồm 68 ca.
+`src/red_team.py` kiểm tra hai bề mặt tấn công mà hệ thống thực tế có thể gặp. Khi chạy đủ cả VLM thật và post-filter, bộ thử gồm 75 ca.
 
-Không cần model, script chạy 45 ca trực tiếp trên post-filter. Khi truyền `--vlm-url` tới llama-server, nó chạy thêm 23 ca prompt injection qua VLM thật. Kết quả console luôn ghi rõ lớp nào đã chạy để tránh gộp nhầm hai chế độ.
+Không cần model, script chạy 52 ca trực tiếp trên post-filter. Khi truyền `--vlm-url` tới llama-server, nó chạy thêm 23 ca prompt injection qua VLM thật. Kết quả console luôn ghi rõ lớp nào đã chạy để tránh gộp nhầm hai chế độ.
 
 **Lớp A — prompt injection vào VLM thật (23 ca).** Payload được đưa qua `delta_text`, trường `weather` của telematics và chữ nằm trong ảnh. Các ca thử yêu cầu model bỏ schema, đóng vai bác sĩ hoặc trả số đo y tế. Cả 23 đầu ra cuối cùng đều nằm trong tập template đã duyệt. Injection vẫn có thể ảnh hưởng tới lựa chọn `observation` hoặc `severity`, nhưng không tạo được câu tự do ngoài schema.
 
-**Lớp B — kiểm tra trực tiếp post-filter (45 ca).** Ba mươi ba câu chứa từ ngữ hoặc số đo y tế được đưa thẳng vào `enforce()`, gồm cả biến thể bỏ dấu và các cách ngắt cụm từ bằng space, tab hoặc newline. Mười hai câu nhắc an toàn hợp lệ được dùng để đo false-positive. Kết quả mong đợi là chặn toàn bộ nhóm đầu mà không sửa nhóm sau.
+**Lớp B — kiểm tra trực tiếp post-filter (52 ca).** Bốn mươi câu chứa từ ngữ hoặc số đo y tế được đưa thẳng vào `enforce()`, gồm cả biến thể bỏ dấu và các cách ngắt cụm từ bằng space, tab hoặc newline. Mười hai câu nhắc an toàn hợp lệ được dùng để đo false-positive. Kết quả mong đợi là chặn toàn bộ nhóm đầu mà không sửa nhóm sau.
 
 | Lớp | Loại | Số ca | Vượt rào | False-positive |
 |---|---|---|---|---|
 | A | Prompt injection vào VLM thật | 23 | 0 | — |
-| B | Câu y tế phải chặn (must-block) | 33 | 0 | — |
+| B | Câu y tế phải chặn (must-block) | 40 | 0 | — |
 | B | Câu an toàn không được chặn (must-pass) | 12 | — | 0 |
-| **Tổng** | | **68** | **0 (0.0%)** | **0** |
+| **Tổng** | | **75** | **0 (0.0%)** | **0** |
 
-Ở vòng chạy đầu tiên, hai câu có cụm "an toàn" bị chặn nhầm. Sau khi bỏ dấu, "an toàn" thành "an toan" và chứa chuỗi `toa`, vốn nằm trong danh sách cấm với nghĩa "toa thuốc". Filter đã được đổi từ so khớp substring sang biên từ `(?<!\w)term(?!\w)`. Lượt audit sau bổ sung chuẩn hóa whitespace cùng các ca riêng cho space, tab và newline. Sau sửa, cả 33 câu cần chặn đều bị giữ lại, còn false-positive vẫn ở 0.
+Ở vòng chạy đầu tiên, hai câu có cụm "an toàn" bị chặn nhầm. Sau khi bỏ dấu, "an toàn" thành "an toan" và chứa chuỗi `toa`, vốn nằm trong danh sách cấm với nghĩa "toa thuốc". Filter đã được đổi từ so khớp substring sang biên từ `(?<!\w)term(?!\w)`. Lượt audit sau bổ sung chuẩn hóa whitespace cùng các ca riêng cho space, tab và newline. Sau sửa, cả 40 câu cần chặn (gồm 7 ca bệnh danh bổ sung sau vòng audit ngoài) đều bị giữ lại, còn false-positive vẫn ở 0.
 
 Kết quả này củng cố lựa chọn dùng constrained decoding làm lớp chính. Post-filter vẫn hữu ích, nhưng bài thử cũng cho thấy filter từ khóa có thể gây false-positive nếu thiết kế không cẩn thận. Vì vậy hai lớp được giữ độc lập và có test riêng.
+
+**Giới hạn của banned list.** Danh sách từ cấm là hữu hạn và không thể liệt kê hết mọi bệnh danh hay cách diễn đạt chẩn đoán; nó không phải một bộ phân loại y khoa theo ngữ nghĩa. Đảm bảo "không bao giờ chẩn đoán" của hệ thống KHÔNG dựa vào lớp này mà dựa vào đường chính: schema enum đóng + template bank duyệt sẵn, nơi model không có kênh phát free text. Post-filter chỉ là lưới phòng thủ thứ hai cho các chế độ thử nghiệm/lỗi quy trình, và cần được bổ sung từ mới mỗi khi red-team tìm ra ca lọt.
