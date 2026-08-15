@@ -4,7 +4,7 @@ Bài làm cho **Bài kiểm tra năng lực Edge VLM & Multimodal AI — Số 3*
 
 ## Dành cho người chấm
 
-Repo được trình bày thành hai phần để tiện đối chiếu. Phần bắt buộc bám sát [đề bài gốc](<assets/BÀI KIỂM TRA NĂNG LỰC EDGE VLM & MULTIMODAL AI - SỐ 3.md>) và chạy hoàn toàn bằng mock, không cần tải model. Phần làm thêm đưa MediaPipe, YOLO26n và Qwen3.5-2B vào cùng pipeline để thử kiến trúc trên dữ liệu thật. Hai phần độc lập với nhau, vì vậy vẫn có thể chấm đầy đủ yêu cầu chính ngay cả khi máy không đủ tài nguyên để chạy model.
+Repo được trình bày thành hai phần để tiện đối chiếu. Phần bắt buộc bám sát [đề bài gốc](assets/BAI_KIEM_TRA_EDGE_VLM_SO_3.md) và chạy hoàn toàn bằng mock, không cần tải model. Phần làm thêm đưa MediaPipe, YOLO26n và Qwen3.5-2B vào cùng pipeline để thử kiến trúc trên dữ liệu thật. Hai phần độc lập với nhau, vì vậy vẫn có thể chấm đầy đủ yêu cầu chính ngay cả khi máy không đủ tài nguyên để chạy model.
 
 Nếu chỉ có 5–10 phút, cách nhanh nhất để xem bài là:
 
