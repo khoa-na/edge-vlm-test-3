@@ -71,11 +71,11 @@ Prompt vẫn chỉ là hướng dẫn xác suất, đặc biệt với model nh�
 }
 ```
 
-Từ decoder đến đầu ra cuối cùng có bốn chốt kiểm soát:
+Từ decoder đến đầu ra cuối cùng có bốn lớp kiểm soát:
 
 1. Grammar constraint (GBNF của llama.cpp): grammar sinh tự động từ JSON schema trên, mọi giá trị là enum đóng — model không có token nào để viết chữ tự do. Đây là ràng buộc thực thi tại decoder, không phải quy ước trong prompt.
 2. Validator tất định sau decode: parse JSON, từ chối mọi key/value ngoài schema. Validator là lưới độc lập, vẫn đứng đó kể cả khi grammar lỗi hoặc backend không hỗ trợ GBNF.
-3. Renderer bằng code: ánh xạ `(observation, severity, trip_factor, vehicle_state)` sang một câu trong ngân hàng template đã duyệt trước — khoảng 20–30 câu, người viết, product và pháp lý duyệt. Lời văn tới người dùng do người viết 100%, model chỉ chọn tình huống.
+3. Renderer bằng code: ánh xạ `(observation, severity, trip_factor, vehicle_state)` sang một câu trong ngân hàng template đã duyệt trước — khoảng 20–30 câu do các nhóm nội dung, sản phẩm và pháp lý rà soát. Toàn bộ lời văn tới người dùng được soạn trước; model chỉ chọn tình huống.
 4. Sampling bảo thủ: `temperature ≤ 0.3`; backend nhúng dùng `max_tokens=80`, còn llama-server dùng 512 để vẫn xử lý được model hybrid nếu server chưa tắt thinking. Lời văn cuối cùng vẫn bị giới hạn bởi schema và renderer.
 
 Cách làm này khiến lời nhắc ít đa dạng hơn free text. Đổi lại, tập câu có thể được đọc và duyệt trước. Nếu cần thêm biến thể, có thể bổ sung nhiều template cùng ý nghĩa mà không mở lại kênh sinh văn bản tự do.
@@ -98,7 +98,7 @@ Một số lựa chọn trong post-filter:
 
 - Không sửa từng phần câu (không thay từ cấm bằng từ khác rồi giữ phần còn lại) — câu bị vá rất dễ giữ nguyên hàm ý chẩn đoán. Vi phạm là vứt cả câu, dùng template.
 - Fail-closed: mọi lỗi runtime (VLM timeout, filter exception, text rỗng) đều trả về template an toàn, không bao giờ trả raw output.
-- Banned list là config (file JSON riêng) để đội pháp lý/product cập nhật được mà không sửa code. Mỗi bản phát hành kèm bộ test tự động: bắn N câu mẫu chứa từ cấm qua filter, yêu cầu chặn 100%.
+- Banned list nằm trong một file cấu hình JSON riêng để nhóm pháp lý và sản phẩm có thể cập nhật mà không phải sửa code. Mỗi bản phát hành đi kèm bộ test tự động, đưa một tập câu mẫu chứa từ cấm qua filter và yêu cầu chặn toàn bộ.
 - Audit log ghi timestamp, `trigger_reason`, loại sự kiện kiểm duyệt và từ khóa hoặc template liên quan. Log không lưu ảnh hay toàn bộ câu đầu vào.
 
 ## 5. Lớp 4 — Safe Fallback Templates
@@ -145,8 +145,8 @@ Không cần model, script chạy 52 ca trực tiếp trên post-filter. Khi tru
 | B | Câu an toàn không được chặn (must-pass) | 12 | — | 0 |
 | **Tổng** | | **75** | **0 (0.0%)** | **0** |
 
-Ở vòng chạy đầu tiên, hai câu có cụm "an toàn" bị chặn nhầm. Sau khi bỏ dấu, "an toàn" thành "an toan" và chứa chuỗi `toa`, vốn nằm trong danh sách cấm với nghĩa "toa thuốc". Filter đã được đổi từ so khớp substring sang biên từ `(?<!\w)term(?!\w)`. Lượt audit sau bổ sung chuẩn hóa whitespace cùng các ca riêng cho space, tab và newline. Sau sửa, cả 40 câu cần chặn (gồm 7 ca bệnh danh bổ sung sau vòng audit ngoài) đều bị giữ lại, còn false-positive vẫn ở 0.
+Ở vòng chạy đầu tiên, hai câu có cụm "an toàn" bị chặn nhầm. Sau khi bỏ dấu, "an toàn" thành "an toan" và chứa chuỗi `toa`, vốn nằm trong danh sách cấm với nghĩa "toa thuốc". Filter đã được đổi từ so khớp substring sang biên từ `(?<!\w)term(?!\w)`. Lần rà soát sau bổ sung bước chuẩn hóa khoảng trắng cùng các ca riêng cho dấu cách, tab và ký tự xuống dòng. Sau khi sửa, cả 40 câu cần chặn, trong đó có 7 ca về tên bệnh được bổ sung sau đợt rà soát độc lập, đều bị giữ lại; số false-positive vẫn bằng 0.
 
 Kết quả này củng cố lựa chọn dùng constrained decoding làm lớp chính. Post-filter vẫn hữu ích, nhưng bài thử cũng cho thấy filter từ khóa có thể gây false-positive nếu thiết kế không cẩn thận. Vì vậy hai lớp được giữ độc lập và có test riêng.
 
-**Giới hạn của banned list.** Danh sách từ cấm là hữu hạn và không thể liệt kê hết mọi bệnh danh hay cách diễn đạt chẩn đoán; nó không phải một bộ phân loại y khoa theo ngữ nghĩa. Đảm bảo "không bao giờ chẩn đoán" của hệ thống KHÔNG dựa vào lớp này mà dựa vào đường chính: schema enum đóng + template bank duyệt sẵn, nơi model không có kênh phát free text. Post-filter chỉ là lưới phòng thủ thứ hai cho các chế độ thử nghiệm/lỗi quy trình, và cần được bổ sung từ mới mỗi khi red-team tìm ra ca lọt.
+**Giới hạn của banned list.** Danh sách từ cấm là hữu hạn và không thể liệt kê hết mọi bệnh danh hay cách diễn đạt chẩn đoán; nó không phải một bộ phân loại y khoa theo ngữ nghĩa. Đảm bảo "không bao giờ chẩn đoán" của hệ thống không dựa vào lớp này mà dựa vào đường chính: schema enum đóng và template bank duyệt sẵn, nơi model không có kênh phát văn bản tự do. Post-filter chỉ là lưới phòng thủ thứ hai cho các chế độ thử nghiệm hoặc lỗi quy trình, và cần được bổ sung từ mới mỗi khi red-team phát hiện trường hợp bỏ sót.

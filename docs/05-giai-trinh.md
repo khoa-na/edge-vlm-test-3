@@ -2,8 +2,8 @@
 
 ## Câu 1 — Vì sao chọn kiến trúc tháp hai tầng?
 
-Tôi tách hệ thống theo mức độ khẩn cấp của quyết định: Tier 1 chịu trách
-nhiệm cho cảnh báo tức thời, còn Tier 2 chỉ được gọi khi cần hiểu thêm ngữ
+Tôi phân chia hệ thống theo mức độ khẩn cấp của quyết định: Tier 1 chịu trách
+nhiệm phát cảnh báo tức thời, còn Tier 2 chỉ được gọi khi cần hiểu thêm ngữ
 cảnh. Nhờ vậy, cảnh báo quan trọng không phụ thuộc vào tốc độ của VLM.
 
 Tier 1 xử lý mọi frame trên CPU. MediaPipe FaceLandmarker cung cấp 478 điểm
@@ -17,10 +17,11 @@ và T1 dùng câu TTS tĩnh, có thể ngắt một lời nhắc thường đang
 bao giờ chờ VLM. `solvePnP`, roll đầy đủ và INT8/NPU vẫn là phần cần làm khi
 chuyển sang phần cứng production, chưa phải khả năng của prototype này.
 
-Tier 2 dùng edge VLM quantized và chỉ chạy theo sự kiện. Phép đo hiện tại
-trên CPU mất khoảng 4–7 giây mỗi lần gọi, nên model chạy trên worker nền một
-slot. Những trigger cần thêm ngữ cảnh gồm PERCLOS cao, ngáp lặp lại, quay đầu
-nhiều, lái liên tục quá lâu và lệch health baseline. Trong lúc chờ model,
+Tier 2 dùng VLM lượng tử hóa chạy tại biên và chỉ được gọi theo sự kiện. Phép
+đo hiện tại trên CPU mất khoảng 4–7 giây mỗi lần gọi, nên worker nền chỉ xử
+lý một tác vụ tại một thời điểm. Những trigger cần thêm ngữ cảnh gồm PERCLOS
+cao, ngáp lặp lại, quay đầu nhiều, lái liên tục quá lâu và lệch health
+baseline. Trong lúc chờ model,
 T2–T5/T7 vẫn có thể trả một câu tĩnh đã duyệt nếu tình huống cần phản hồi sớm.
 Theo dõi nhiệt độ chip và bỏ bớt chu kỳ suy luận khi thiết bị nóng mới chỉ là
 điểm tích hợp dự kiến, chưa được triển khai trong repo.
@@ -28,7 +29,7 @@ Theo dõi nhiệt độ chip và bỏ bớt chu kỳ suy luận khi thiết bị
 Trên 20.806 frame của tám sequence FL3D, Tier 1 đạt recall 85% ở mức episode
 cho các đoạn microsleep dài từ 1,5 giây, với 0,65% frame alert làm trạng thái
 T0 bật. Kết quả chưa đủ để coi là chứng nhận production, nhưng ủng hộ quyết
-định giữ VLM ra khỏi critical path. Chi tiết nằm trong
+định giữ VLM ra khỏi đường xử lý khẩn cấp (critical path). Chi tiết nằm trong
 [`01-two-tier-cascade.md`](01-two-tier-cascade.md) và
 [`04-evaluation.md`](04-evaluation.md).
 
@@ -46,7 +47,7 @@ Thiết kế có bốn lớp:
 2. Grammar ép đầu ra thành JSON gồm bốn enum: `observation`, `severity`,
    `trip_factor` và `vehicle_state`. Validator từ chối key hoặc value nằm
    ngoài schema. Sau đó renderer chọn câu trong template bank; model không
-   có đường để đưa free text thẳng ra loa.
+   thể đưa văn bản tự do thẳng ra loa.
 3. Post-filter quét từ cấm, cả dạng không dấu, mẫu số đo y tế như `mmHg`,
    `bpm`, `120/80`, cùng giới hạn độ dài. Nếu vi phạm, toàn bộ câu được thay
    bằng fallback an toàn thay vì cố sửa từng từ.

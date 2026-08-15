@@ -1,6 +1,6 @@
 # Đánh giá trên dữ liệu thật — Dataset FL3D
 
-## 1. Dataset
+## 1. Bộ dữ liệu
 
 Tôi dùng FL3D (Frame-Level Driver Drowsiness Detection) trên Kaggle,
 `matjazmuc/frame-level-driver-drowsiness-detection-fl3d`. Bộ dữ liệu có dung
@@ -8,7 +8,7 @@ lượng khoảng 600 MB, gồm 53.331 frame từ video cabin NITYMED và có nh
 từng frame: `alert`, `microsleep`, `yawning`. Hai nhãn sau tương ứng trực tiếp
 với mắt nhắm kéo dài (T0) và ngáp (T3), nên phù hợp để kiểm tra nhánh Tier 1.
 
-Tải không cần token:
+Có thể tải bộ dữ liệu mà không cần token:
 
 ```python
 import kagglehub
@@ -32,7 +32,7 @@ pipeline với cùng ngưỡng và state machine như lúc chạy demo.
 
 ## 3. Kết quả (8 sequence đầu theo thứ tự tên — không chọn lọc, 20,806 frame)
 
-Frame-level, đo chất lượng chỉ số EAR/MAR tức thời:
+Ở cấp độ từng frame, bảng dưới đây phản ánh chất lượng của các chỉ số EAR/MAR tức thời:
 
 | nhãn \ dự đoán | alert | microsleep | yawning | no_face |
 |---|---|---|---|---|
@@ -52,8 +52,8 @@ không, thay vì yêu cầu mọi frame trong đoạn đều được phân lo�
   giảm tiếp được bằng per-user EAR calibration, vì ngưỡng 0.20 cố định không
   hợp mọi hình dạng mắt.
 
-`0.65%` ở đây là tỷ lệ frame mà state T0 đang bật, tương đương khoảng 586
-frame-state/giờ nếu ngoại suy thô ở 25 FPS; nó **không phải** 586 lần phát loa
+`0.65%` ở đây là tỷ lệ frame mà trạng thái T0 đang bật, tương đương khoảng 586
+frame ở trạng thái T0 mỗi giờ nếu ngoại suy thô ở 25 FPS; nó **không phải** 586 lần phát loa
 độc lập vì các frame nằm trong cụm và runner có dedupe/cooldown. Để công bố
 false-alert SLA cần đếm episode cảnh báo độc lập trên nhiều giờ lái tự nhiên,
 phép đo này chưa thay thế được.
@@ -85,7 +85,7 @@ phép đo này chưa thay thế được.
 
 Tier 2 đã được thử với model thật Qwen3.5-2B-Instruct Q4_K_M (1,28 GB) và
 mmproj F16 (0,67 GB), phục vụ qua `llama-server` bằng API tương thích OpenAI.
-Tôi chọn chạy server thành một process riêng để pipeline chỉ cần gọi HTTP
+Tôi chọn chạy server thành một tiến trình riêng để pipeline chỉ cần gọi HTTP
 trên localhost; cách tách này cũng giúp lỗi hoặc độ trễ của VLM không giữ
 vòng xử lý camera.
 
@@ -98,7 +98,7 @@ python -m src.run_video --input clip.mp4 --vlm-url http://127.0.0.1:8090
 
 Kết quả trên frame FL3D thật (CPU, 8 thread):
 
-| Case | VLM trả (JSON enum) | Câu ra loa | Latency |
+| Tình huống | VLM trả về (JSON enum) | Câu phát ra loa | Độ trễ |
 |---|---|---|---|
 | Frame microsleep + delta baseline + lái 125' trời 35°C | `eyes_heavy \| recommend_rest_now` | "Bạn lái đã lâu dưới trời nóng và mắt có vẻ mỏi, tấp vào chỗ mát nghỉ vài phút cho tỉnh táo nhé." (audio_short) | ~4–7s |
 | Frame alert, không delta | `looks_normal \| none` | (không nhắc — đúng) | ~4s |
@@ -107,7 +107,7 @@ Kết quả trên frame FL3D thật (CPU, 8 thread):
 đó chuyển thành grammar tại decoder. Vì vậy model chỉ chọn các giá trị enum,
 không trực tiếp viết câu sẽ phát cho người lái như mô tả trong docs/02.
 
-Việc chạy model thật làm lộ ra ba vấn đề không xuất hiện với mock; cả ba đã
+Việc chạy model thật cho thấy ba vấn đề không xuất hiện với mock; cả ba đã
 được xử lý trong code:
 
 1. Chế độ reasoning dùng hết ngân sách token cho phần thinking và đôi khi để

@@ -4,13 +4,13 @@
 
 Mục tiêu của khối này không phải kết luận người lái đang mắc bệnh, mà là nhận ra hôm nay họ có khác đáng kể so với trạng thái thường ngày hay không, chẳng hạn mắt sưng hơn, quầng thâm rõ hơn hoặc sắc mặt nhợt hơn. Việc so sánh như vậy cần dữ liệu của nhiều ngày, nhưng không vì thế mà phải lưu ảnh khuôn mặt. Tôi chọn giữ toàn bộ xử lý trên thiết bị và chỉ lưu những chỉ số cần thiết, phù hợp với nguyên tắc giảm thiểu dữ liệu của GDPR và Nghị định 13/2023/NĐ-CP.
 
-## 2. Nguyên tắc: lưu SỐ, không lưu ẢNH
+## 2. Nguyên tắc: chỉ lưu chỉ số, không lưu ảnh
 
 ```
-Frame (RAM) ──► Trích xuất feature vô hướng (on-device, <1s)
+Frame (RAM) ──► Trích xuất đặc trưng dạng số (on-device, <1s)
                         │
                         ▼
-              8 chỉ số số học phục vụ đúng bài toán
+              8 chỉ số cần thiết cho phép so sánh
                         │
                         ▼
               SQLite local — rolling 7-14 ngày
@@ -24,7 +24,7 @@ Pipeline dùng lại landmark từ Tier 1, lấy các vùng nhỏ quanh mắt, m
 
 ## 3. Bộ feature trích xuất (mỗi phiên đo)
 
-| Feature | Cách tính (on-device) | Bắt bất thường gì |
+| Feature | Cách tính (on-device) | Ý nghĩa |
 |---|---|---|
 | `eye_darkness` | Độ sáng trung bình (kênh L trong Lab) vùng dưới hốc mắt, chia cho độ sáng má (tự chuẩn hóa ánh sáng) | Quầng thâm đậm hơn ngày thường |
 | `eye_openness` | EAR trung bình khi mắt "mở" trong phiên | Mắt sưng / lờ đờ (mở không hết) |
@@ -38,9 +38,9 @@ Pipeline dùng lại landmark từ Tier 1, lấy các vùng nhỏ quanh mắt, m
 
 Ánh sáng là nguồn sai lệch lớn nhất của nhóm chỉ số màu: cùng một khuôn mặt có thể trông nhợt dưới đèn trắng nhưng hoàn toàn bình thường dưới nắng chiều. Vì vậy, các chỉ số màu được tính tương đối giữa hai vùng trên cùng khuôn mặt, như môi so với má hoặc hốc mắt so với má. Mỗi mẫu còn đi kèm `light_bucket`; runner nhận bucket 0–3 từ sensor/CLI hoặc ước lượng từ độ sáng frame khi không có sensor. Baseline chỉ so sánh các phiên trong cùng bucket. Frame có luma trung bình dưới 35 bị bỏ thay vì cố ghi một giá trị nhiễu.
 
-Trước khi lưu, mẫu phải qua một quality gate: MediaPipe được cấu hình detection/presence confidence 0,7; pipeline bỏ phiên nếu không thấy mặt, backend báo confidence thấp, frame quá tối hoặc chưa đến một nửa số feature có giá trị hợp lệ. PERCLOS chỉ được lưu sau khi có ít nhất 30 giây dữ liệu, blink rate sau khoảng 60 giây và yawn rate sau đủ cửa sổ 10 phút; trước đó các trường này là `NULL`. Phần nhận diện khẩu trang và kính râm chưa được nối vào nhánh health vì repo chưa có weights pre-ride thật; do đó prototype chưa thể đảm bảo mọi vùng bị che đều được loại chính xác.
+Trước khi lưu, mẫu phải qua một bước kiểm tra chất lượng: MediaPipe được cấu hình detection/presence confidence 0,7; pipeline bỏ phiên nếu không thấy mặt, backend báo confidence thấp, frame quá tối hoặc chưa đến một nửa số feature có giá trị hợp lệ. PERCLOS chỉ được lưu sau khi có ít nhất 30 giây dữ liệu, blink rate sau khoảng 60 giây và yawn rate sau đủ cửa sổ 10 phút; trước đó các trường này là `NULL`. Phần nhận diện khẩu trang và kính râm chưa được nối vào nhánh health vì repo chưa có weights pre-ride thật; do đó prototype chưa thể đảm bảo mọi vùng bị che đều được loại chính xác.
 
-## 4. Schema SQLite hiện thực
+## 4. Lược đồ SQLite đã triển khai
 
 ```sql
 -- Mỗi phiên đo (5 phút/lần khi lái + pre-ride): 1 dòng, chỉ chứa số.
@@ -80,7 +80,7 @@ CREATE TABLE health_anomaly_days (
 );
 ```
 
-Mean và độ lệch chuẩn của 7 ngày được tính trực tiếp từ `health_daily` khi cần, thay vì cache thêm một bảng `user_health_baseline`. Với quy mô chỉ vài chục dòng của prototype, cách này đơn giản hơn và tránh tạo ra hai nguồn dữ liệu có thể lệch nhau.
+Trung bình và độ lệch chuẩn của 7 ngày được tính trực tiếp từ `health_daily` khi cần, thay vì lưu đệm thêm một bảng `user_health_baseline`. Với quy mô chỉ vài chục dòng của prototype, cách này đơn giản hơn và tránh tạo ra hai nguồn dữ liệu có thể lệch nhau.
 
 Trong các lần chạy thử, cơ sở dữ liệu chỉ ở mức vài chục KB nên chi phí lưu trữ không đáng kể. SQLite cũng giúp việc tổng hợp theo ngày và xóa dữ liệu cũ rõ ràng hơn so với một file JSON tự quản lý.
 
@@ -105,7 +105,7 @@ Mỗi feature có một hướng lệch cần chú ý, được định nghĩa t
 | `lip_color_index` | z âm (môi mất sắc đỏ = tím tái) |
 | `blink_rate`, `perclos`, `yawn_rate` | z dương (chớp/nhắm/ngáp nhiều hơn) |
 
-Cờ anomaly bật theo một trong hai cách. Cách thứ nhất là có ít nhất hai feature cùng lệch theo hướng cần chú ý với |z| > 2.0. Cách thứ hai là một feature lệch mạnh với |z| > 3.0 và lặp lại trong hai phiên liên tiếp. Khi độ lệch chuẩn lịch sử bằng hoặc gần 0, mẫu số dùng noise floor riêng cho từng feature thay vì epsilon số học; cách này tránh biến sai khác rất nhỏ thành hàng trăm sigma. Các noise floor hiện là guard cho prototype và cần hiệu chỉnh lại trên camera đích.
+Cờ anomaly bật theo một trong hai cách. Cách thứ nhất là có ít nhất hai feature cùng lệch theo hướng cần chú ý với |z| > 2.0. Cách thứ hai là một feature lệch mạnh với |z| > 3.0 và lặp lại trong hai phiên liên tiếp. Khi độ lệch chuẩn lịch sử bằng hoặc gần 0, mẫu số dùng ngưỡng sàn riêng cho từng feature thay vì epsilon số học; cách này tránh biến sai khác rất nhỏ thành hàng trăm sigma. Các ngưỡng sàn hiện chỉ là biện pháp bảo vệ cho prototype và cần được hiệu chỉnh lại trên camera đích.
 
 Một số quy tắc giúp baseline không tự học nhầm dữ liệu bất thường:
 
@@ -113,7 +113,7 @@ Một số quy tắc giúp baseline không tự học nhầm dữ liệu bất t
 - Baseline là rolling mean/std trên 7 ngày hợp lệ gần nhất, nên có thể thích nghi dần với những thay đổi tự nhiên. Tuy nhiên, ngày đã bị cảnh báo được đánh dấu `is_anomalous=1` và loại khỏi cửa sổ; nếu không, một trạng thái bất thường kéo dài vài ngày có thể vô tình trở thành mức bình thường mới.
 - Khi phát hiện độ lệch, pipeline tạo trigger T7. VLM chỉ nhận phần chênh lệch dưới dạng text, chẳng hạn `eye_darkness ... 2.4σ`, cùng với frame hiện tại còn ở trong RAM. Ảnh lịch sử không được đưa vào VLM vì chúng chưa từng được ghi lại.
 
-## 6. Checklist privacy: cái đã có và cái cần tích hợp production
+## 6. Quyền riêng tư: phần đã có và phần cần bổ sung khi triển khai
 
 | Nguyên tắc | Prototype hiện tại | Production cần thêm |
 |---|---|---|

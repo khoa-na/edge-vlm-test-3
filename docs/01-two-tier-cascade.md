@@ -2,7 +2,7 @@
 
 ## 1. Nguyên tắc thiết kế
 
-Bài toán này có một mâu thuẫn khá rõ. Hệ thống DMS phải theo dõi liên tục ở 5–10 FPS và phát cảnh báo trong vòng 300 ms, trong khi một lần suy luận VLM trên CPU mất khoảng 4–7 giây. Vì vậy, đưa VLM vào vòng xử lý từng frame vừa không đáp ứng được độ trễ, vừa tạo tải nhiệt không cần thiết.
+Hai yêu cầu của bài toán tạo ra một đánh đổi rõ ràng. Hệ thống DMS phải theo dõi liên tục ở 5–10 FPS và phát cảnh báo trong vòng 300 ms, trong khi một lần suy luận VLM trên CPU mất khoảng 4–7 giây. Nếu đưa VLM vào vòng xử lý từng frame, hệ thống vừa không đáp ứng được độ trễ, vừa tạo tải nhiệt không cần thiết.
 
 Tôi tách pipeline thành hai đường độc lập. Đường an toàn do Tier 1 xử lý bằng các phép đo CV và luật tất định; cảnh báo khẩn cấp được phát ngay tại đây. Tier 2 chỉ nhận những sự kiện cần thêm ngữ cảnh và có thể chấp nhận chờ vài giây. Nhờ cách tách này, VLM giúp lời nhắc phù hợp hơn nhưng không trở thành điều kiện để hệ thống phát hiện nguy hiểm.
 
@@ -27,7 +27,7 @@ Camera 5-10 FPS
   (buzzer/TTS)        │ driven hoặc định kỳ 5 phút)  │
                       │  • Phân tích ngữ cảnh sâu    │
                       │  • So sánh health baseline   │
-                      │  • Sinh lời nhắc tinh tế     │
+                      │  • Chọn observation/severity │
                       │  → qua Guardrails (Khối 2)   │
                       └──────────────────────────────┘
 ```
@@ -38,9 +38,9 @@ Camera 5-10 FPS
 
 | Thành phần | Mô hình | Chỉ số tính ra | Chi phí/frame |
 |---|---|---|---|
-| Face Landmark | MediaPipe FaceLandmarker (478 điểm, đã chạy thật — xem docs/04) | EAR, MAR, vị trí mắt/môi | ~5–10ms CPU |
-| Head Pose | Tỉ lệ hình học landmark 2D + calibration góc camera | Pitch / Yaw xấp xỉ | <1ms sau landmark |
-| Object Detection (in-ride) | YOLO26n COCO `.pt` FP32, chỉ giữ class `cell phone` | confidence phone toàn frame | ~44ms/lần CPU @384; chạy stride 3 và cache nên trung bình ~15ms/frame |
+| Face Landmark | MediaPipe FaceLandmarker (478 điểm, đã chạy thật — xem docs/04) | EAR, MAR, vị trí mắt/môi | ~5–10 ms CPU |
+| Head Pose | Tỉ lệ hình học landmark 2D + calibration góc camera | Pitch / Yaw xấp xỉ | <1 ms sau landmark |
+| Object Detection (in-ride) | YOLO26n COCO `.pt` FP32, chỉ giữ class `cell phone` | confidence phone toàn frame | ~44 ms/lần CPU @384; chạy stride 3 và cache nên trung bình ~15 ms/frame |
 | Object Detection (pre-ride) | Interface `Yolo26PreRideDetector` | helmet_strap, mask, sunglasses | Cần weights finetune riêng; repo hiện dùng mock cho nhánh này |
 
 Tôi dùng YOLO26n vì model nhỏ, kiến trúc NMS-free/DFL-free và đã có class điện thoại trong COCO. Bản hiện tại chạy weights `.pt` FP32 trên CPU. Việc export INT8 hay chuyển sang NPU phụ thuộc vào thiết bị đích nên chưa được tính là phần đã triển khai.
@@ -65,7 +65,7 @@ Sau khi một loại sự kiện đã kích hoạt Tier 2, cooldown ngăn cùng 
 
 ### 2.3 Kiểm tra trước khi chạy (pre-ride check)
 
-`pre_ride_check()` nhận một cụm frame khi xe chưa lăn bánh rồi lấy kết quả theo đa số, thay vì kết luận từ một ảnh có thể bị mờ. Quai mũ luôn được kiểm tra; khẩu trang và kính chỉ được nhắc khi telematics báo trời nắng bụi. Repo đã có logic và test với detector giả lập. Phần weights finetune cũng như việc nối API này vào lifecycle thật của phương tiện vẫn nằm ngoài hai runner webcam/video hiện tại.
+`pre_ride_check()` nhận một cụm frame khi xe chưa lăn bánh rồi lấy kết quả theo đa số, thay vì kết luận từ một ảnh có thể bị mờ. Quai mũ luôn được kiểm tra; khẩu trang và kính chỉ được nhắc khi telematics báo trời nắng bụi. Repo đã có logic và test với detector giả lập. Phần weights finetune cũng như việc nối API này vào vòng đời vận hành thực tế của phương tiện vẫn nằm ngoài hai runner webcam/video hiện tại.
 
 ## 3. Bảng điều kiện trigger — ai xử lý, xử lý thế nào
 
@@ -90,7 +90,7 @@ Tier 2 được thử nghiệm với Qwen3.5-2B-Instruct Q4_K_M, gồm file GGUF
 
 Mỗi request gồm frame hiện tại, `trigger_reason`, telematics và phần chênh lệch so với baseline dưới dạng text. Ảnh lịch sử không được gửi vào model. Runner hiện dùng nguyên frame; crop vùng mặt là tối ưu có thể bổ sung khi triển khai. VLM chỉ trả JSON enum, còn câu tiếng Việt do renderer chọn từ template bank và được kiểm tra lần cuối bằng `enforce_medical_guardrails`.
 
-Worker VLM chỉ giữ một job tại một thời điểm. Nếu model đang chạy, trigger mới không được xếp thành hàng dài vì đến lúc xử lý xong thì frame và ngữ cảnh có thể đã cũ. Theo dõi nhiệt độ chip và bỏ chu kỳ T6 khi thiết bị quá nóng là phần cần nối với sensor của SoC thực tế; repo Python chưa có backend này.
+Worker VLM chỉ xử lý một tác vụ tại một thời điểm. Nếu model đang chạy, trigger mới không được xếp thành hàng dài vì đến lúc xử lý xong thì frame và ngữ cảnh có thể đã cũ. Việc theo dõi nhiệt độ chip và bỏ chu kỳ T6 khi thiết bị quá nóng cần được nối với cảm biến của SoC thực tế; repo Python chưa có backend này.
 
 ## 5. Ngân sách độ trễ (latency budget)
 
